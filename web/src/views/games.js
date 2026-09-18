@@ -10,6 +10,9 @@ const SINGLE = [
 const ONLINE = [
   { key: "gomoku", name: "五子棋", desc: "15×15 对弈，五连即胜", icon: "grid" },
   { key: "tictactoe", name: "井字棋", desc: "30 秒一局的极简对局", icon: "grid" },
+  { key: "go", name: "围棋", desc: "9 路棋盘 · 数子定胜负 · 黑贴 7.5 目", icon: "go" },
+  { key: "xiangqi", name: "象棋", desc: "标准中国象棋 · 将死 / 困毙即胜", icon: "chess" },
+  { key: "werewolf", name: "狼人杀", desc: "6~12 人正规板子 · 预女猎白", icon: "wolf" },
   { key: "draw", name: "你画我猜", desc: "2~10 人轮流作画互相猜", icon: "brush" },
   { key: "bomb", name: "数字炸弹", desc: "轮流报数，踩中炸弹的人出局", icon: "bomb" },
 ];
@@ -388,7 +391,9 @@ registerRoute("/games", defineView("games", {
     }
 
     function routeFor(room) {
-      if (["gomoku", "tictactoe"].includes(room.game)) return "/games/board?room=" + room.id;
+      if (["gomoku", "tictactoe", "go"].includes(room.game)) return "/games/board?room=" + room.id;
+      if (room.game === "xiangqi") return "/games/xiangqi?room=" + room.id;
+      if (room.game === "werewolf") return "/games/werewolf?room=" + room.id;
       if (room.game === "draw") return "/games/draw?room=" + room.id;
       if (room.game === "bomb") return "/games/bomb?room=" + room.id;
       return "/games";
@@ -417,7 +422,7 @@ registerRoute("/games", defineView("games", {
 
     return { tab, rooms, records, dialog, codeInput, onlineGames: ONLINE, singleGames: SINGLE,
              board, boardSegEl, boardPill, myId, myPoints, openBoard, switchScope, store,
-             trackEl, segEl, pill, xAnim,
+             trackEl, segEl, pill, xAnim, mediaUrl,
              refresh, setTab, pick, back, closeDialog, doCreate, doJoin, joinRoom, spectate,
              nameOf, shortTime, winnersText, navigate };
   },

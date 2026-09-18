@@ -1,5 +1,6 @@
 import {
   defineView, registerRoute, ref, computed, watch, onUnmounted, store, wsSend, toast, haptic, mediaUrl,
+  confirmDialog,
 } from "../ui.js";
 import { useRoom } from "../room.js";
 
@@ -46,6 +47,15 @@ registerRoute("/games/board", defineView("gameBoard", {
       </div>
     </div>
 
+    <div v-if="isGo && room?.started && !finished" class="row gap3 mt4 go-bar">
+      <span class="chip">黑提 {{ captures['1'] || 0 }} 子</span>
+      <span class="chip">白提 {{ captures['2'] || 0 }} 子</span>
+      <span class="chip" :class="passes ? 'chip-orange' : ''">{{ passes ? '有一方停手' : '白贴 7.5 目' }}</span>
+    </div>
+    <p v-if="isGo && room?.started && !finished" class="cap center mt3">
+      {{ isMyTurn ? '轮到你落子（可以停一手或认输）' : '等对手落子' }}
+    </p>
+
     <p v-if="canReady && !myReady" class="cap center mt4">对手已准备 {{ ready.length }}/{{ players.length }} · 双方都准备后自动开局</p>
     <p v-else-if="canReady && myReady && !room?.started" class="cap center mt4 green-text">
       已准备 {{ ready.length }}/{{ players.length }} · 等对手点准备
@@ -61,6 +71,11 @@ registerRoute("/games/board", defineView("gameBoard", {
         <button class="btn grow" :class="othersWantRematch ? 'btn-green' : 'btn-primary'" @click="rematch">
           {{ iWantRematch ? '已发送' : '再来一局' }}
         </button>
+      </template>
+      <template v-else-if="isGo">
+        <button class="btn grow" @click="leaveRoom(false)">离开房间</button>
+        <button class="btn" :disabled="!isMyTurn" @click="passMove">停一手</button>
+        <button class="btn btn-danger" :disabled="!room?.started" @click="resign">认输</button>
       </template>
       <button v-else class="btn grow" @click="leaveRoom(false)">离开房间</button>
       <button v-if="spectators.length" class="btn">{{ spectators.length }} 人围观</button>
@@ -118,12 +133,16 @@ registerRoute("/games/board", defineView("gameBoard", {
       return marks[String(store.user?.id)] || 0;
     });
     const isMyTurn = computed(() => roomApi.room.value?.state?.turn === store.user?.id);
+    const isGo = computed(() => roomApi.room.value?.game === "go");
+    const captures = computed(() => roomApi.room.value?.state?.captures || {});
+    const passes = computed(() => roomApi.room.value?.state?.passes || 0);
     const canStart = computed(() => !roomApi.room.value?.started && players.value.length === 2 && !finished.value);
     const statusText = computed(() => {
       if (!roomApi.room.value) return "连接中…";
       if (finished.value) return "本局结束";
       if (roomApi.aborted.value) return "本局已中止";
       if (!roomApi.room.value.started) return players.value.length < 2 ? "等待对手加入" : "点准备，双方都准备后开局";
+      if (isGo.value) return isMyTurn.value ? "轮到你落子" : "等待对手落子";
       return isMyTurn.value ? "轮到你落子" : "等待对手落子";
     });
     const resultTitle = computed(() => {
@@ -142,7 +161,7 @@ registerRoute("/games/board", defineView("gameBoard", {
     function syncBoard() {
       const room = roomApi.room.value;
       const state = (room && room.state) || {};
-      const expected = (room && room.game) === "tictactoe" ? 3 : 15;
+      const expected = (room && room.game) === "tictactoe" ? 3 : ((room && room.game) === "go" ? 9 : 15);
       size.value = state.size || expected;
       const total = size.value * size.value;
       if (state.board && state.board.length) board.value = state.board;
@@ -161,10 +180,24 @@ registerRoute("/games/board", defineView("gameBoard", {
     }
 
     function start() { wsSend({ t: "game.start" }); }
+    function passMove() {
+      if (!roomApi.room.value?.started || finished.value) return;
+      if (roomApi.isSpectator.value) { toast("观战模式不能操作", "warn"); return; }
+      if (!isMyTurn.value) { haptic(20); return; }
+      confirmDialog("确定停一手（pass）？双方连续停手就数子定胜负。", { okText: "停一手" })
+        .then((yes) => { if (yes) wsSend({ t: "game.move", pass: true }); });
+    }
+    function resign() {
+      if (!roomApi.room.value?.started || finished.value) return;
+      if (roomApi.isSpectator.value) { toast("观战模式不能操作", "warn"); return; }
+      confirmDialog("确定认输吗？本局会判对手胜。", { okText: "认输", danger: true })
+        .then((yes) => { if (yes) wsSend({ t: "game.move", resign: true }); });
+    }
 
     onUnmounted(() => { if (unwatch) unwatch(); });
 
     return { ...roomApi, board, size, last, players, spectators, finished, myMark, isMyTurn, canStart, isSpectator: roomApi.isSpectator,
-             statusText, resultTitle, resultReason, markOf, isTurn, play, start, mediaUrl };
+             statusText, resultTitle, resultReason, markOf, isTurn, play, start, mediaUrl,
+             isGo, captures, passes, passMove, resign };
   },
 }));

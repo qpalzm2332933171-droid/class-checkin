@@ -16,6 +16,8 @@ import "./views/profile.js";
 import "./views/changelog.js";
 import "./views/admin.js";
 import "./views/game-board.js";
+import "./views/game-xiangqi.js";
+import "./views/game-werewolf.js";
 import "./views/game-draw.js";
 import "./views/game-bomb.js";
 import "./views/game-2048.js";
