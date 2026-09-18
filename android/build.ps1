@@ -1,4 +1,4 @@
-<#
+﻿<#
   构建班级签到安卓客户端（不依赖 Gradle，直接用 SDK 的 aapt2 / d8 / apksigner）
   用法：
     .\build.ps1                       # 用默认服务器地址打包

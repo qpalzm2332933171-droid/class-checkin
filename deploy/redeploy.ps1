@@ -1,4 +1,4 @@
-# 重新打包并部署到服务器
+﻿# 重新打包并部署到服务器
 param([string]$Remote = "vanmc")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot

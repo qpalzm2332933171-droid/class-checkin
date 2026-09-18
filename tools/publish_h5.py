@@ -56,7 +56,7 @@ def main():
     payload, count = build_zip()
     result = call(base, "/api/admin/upload", "POST", token=token, raw=payload,
                   query="?name=h5.zip&kind=h5&version_code=%d&version_name=%s&notes=%s"
-                        % (current + 1, base.split("//")[1].split(":")[0], urllib.parse.quote(notes)))
+                        % (current + 1, urllib.parse.quote("v%d" % (current + 1)), urllib.parse.quote(notes)))
     print("打包 %d 个文件, %.1f KB" % (count, len(payload) / 1024.0))
     print("已发布 H5 热更新包: v%s -> v%s" % (current, result["version_code"]))
     return 0
