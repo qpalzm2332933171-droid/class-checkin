@@ -1,0 +1,65 @@
+// Inline SVG icon set (24x24, stroke based, Apple-ish weight).
+const P = {
+  check: "M20 6 9 17l-5-5",
+  checkCircle: "M22 11.1V12a10 10 0 1 1-5.9-9.1M22 4l-10 10.1-3-3",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 7v5l3.5 2",
+  calendar: "M8 2v4M16 2v4M3 10h18M5 6h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z",
+  chat: "M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 0 1 11 4h2a8 8 0 0 1 8 8Z",
+  game: "M7 12h4M9 10v4M16.5 12.5h.01M15 10.5h.01M17 4h-10a5 5 0 0 0-5 5v6a5 5 0 0 0 5 5h10a5 5 0 0 0 5-5V9a5 5 0 0 0-5-5Z",
+  user: "M20 21v-2a5 5 0 0 0-5-5H9a5 5 0 0 0-5 5v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
+  users: "M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8",
+  shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z",
+  crown: "M3 7l4 10h10l4-10-6 3-5-6-5 6-2-3Z",
+  plus: "M12 5v14M5 12h14",
+  close: "M18 6 6 18M6 6l12 12",
+  back: "M15 18l-6-6 6-6",
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z",
+  refresh: "M21 12a9 9 0 1 1-3-6.7M21 4v5h-5",
+  trash: "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14",
+  edit: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+  eyeOff: "M3 3l18 18M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-1.2M6.7 6.7C4 8.3 2 12 2 12s3.6 7 10 7c2 0 3.7-.6 5.1-1.5M14 5.3A10.4 10.4 0 0 1 22 12s-.9 1.8-2.5 3.4",
+  logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  bell: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0",
+  chart: "M3 3v18h18M8 17V9M13 17V5M18 17v-6",
+  gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-2-1.2L14.6 3h-4l-.4 2.7a7.6 7.6 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7.4 7.4 0 0 0 5.8 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1c.6.5 1.3.9 2 1.2l.4 2.7h4l.4-2.7c.7-.3 1.4-.7 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z",
+  terminal: "M4 17l6-5-6-5M12 19h8",
+  download: "M12 3v12M7 11l5 5 5-5M5 21h14",
+  upload: "M12 21V9M7 13l5-5 5 5M5 4h14",
+  image: "M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6",
+  wifi: "M5 12.5a10 10 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0M12 20h.01M2 9a15 15 0 0 1 20 0",
+  lock: "M5 11h14v10H5zM8 11V8a4 4 0 0 1 8 0v3",
+  sparkles: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3ZM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z",
+  flag: "M4 22V4a6 6 0 0 1 6 0 6 6 0 0 0 6 0 6 6 0 0 1 4 1v10a6 6 0 0 0-4-1 6 6 0 0 1-6 0 6 6 0 0 0-6 0",
+  puzzle: "M9 3h6v3a2 2 0 1 0 0 0V3M3 9v6h3a2 2 0 1 1 0 0H3v6h6v-3a2 2 0 1 1 0 0v3h6v-3a2 2 0 1 1 0 0v3h6V9h-3a2 2 0 1 1 0 0h3V3h-6",
+  copy: "M8 8h11v11H8zM5 16H4V4h11v1",
+  arrowUp: "M12 19V5M5 12l7-7 7 7",
+  bolt: "M13 2 3 14h8l-1 8 10-12h-8l1-8Z",
+  heart: "M12 21s-7-4.5-9-9a5 5 0 0 1 9-3 5 5 0 0 1 9 3c-2 4.5-9 9-9 9Z",
+  refreshBig: "M12 3a9 9 0 1 0 9 9",
+  grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+  brush: "M4 20s1-3 3-3 3 1 3 3-2 3-3 3-3-3-3-3ZM11 16 20 7a2 2 0 0 0-3-3L8 13",
+  bomb: "M11 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM17.5 6.5 20 4M18 3h4v4M15 5a3 3 0 0 0-4 0",
+  mapPin: "M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Zm-8 2.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z",
+  crown2: "M2 18h20M4 18 2 7l6 4 4-7 4 7 6-4-2 11",
+  megaphone: "M3 11v3l12 5V6L3 11ZM15 9a3 3 0 0 1 0 6M6 14v5h3",
+  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM21 21l-4.3-4.3",
+  location: "M12 22s7-6 7-12a7 7 0 1 0-14 0c0 6 7 12 7 12Zm0-9.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z",
+  topic: "M4 5h16v10H9l-5 4V5Z",
+  play: "M6 4l14 8-14 8V4Z",
+};
+
+export const Icon = {
+  name: "Icon",
+  props: { n: { type: String, required: true }, size: { type: [Number, String], default: 22 } },
+  template: `
+    <svg :width="size" :height="size" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path :d="path" />
+    </svg>`,
+  computed: {
+    path() { return P[this.n] || P.check; },
+  },
+};
+
+export default Icon;

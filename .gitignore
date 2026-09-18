@@ -1,0 +1,37 @@
+# 运行期数据（数据库 / 上传的图片 / 日志 / 初始账号）—— 绝不入库
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# 私有：含服务器地址与口令，仅本地保留
+开发指南.md
+docs/账号表.csv
+tests/browser/accounts.json
+
+# 构建产物
+android/build/
+android/dist/
+android/app/build/
+android/.gradle/
+*.apk
+*.keystore
+*.jks
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 临时
+*.tgz
+_srv.out
+_ep*/

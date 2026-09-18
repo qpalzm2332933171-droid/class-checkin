@@ -1,0 +1,18 @@
+{
+  "gt01": {
+    "username": "gt01",
+    "password": "改成你自己的测试账号密码"
+  },
+  "gt02": {
+    "username": "gt02",
+    "password": "改成你自己的测试账号密码"
+  },
+  "cw01": {
+    "username": "cw01",
+    "password": "改成你自己的测试账号密码"
+  },
+  "admin": {
+    "username": "admin",
+    "password": "改成你自己的管理员密码"
+  }
+}
