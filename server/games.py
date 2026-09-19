@@ -1,5 +1,6 @@
 """Turn-based multiplayer games over WebSocket rooms (server authoritative)."""
 
+import asyncio
 import os
 import random
 import time
@@ -7,6 +8,7 @@ import time
 import boardgames as bgl
 import db
 import werewolf as ww
+from drawwords import WORDS
 from util import dumps, log, now
 
 ROOMS = {}
@@ -42,19 +44,13 @@ async def broadcast(obj):
     await ws.broadcast(obj)
 
 
-WORDS = [
-    "奶茶", "黑板", "篮球", "耳机", "沙发", "西瓜", "企鹅", "长城", "火锅", "雨伞",
-    "吉他", "灯泡", "自行车", "熊猫", "风筝", "冰淇淋", "足球", "月亮", "机器人", "汉堡",
-    "雨鞋", "望远镜", "蘑菇", "钟表", "剪刀", "相机", "钢琴", "棒棒糖", "火箭", "螃蟹",
-    "森林", "灯塔", "披萨", "滑板", "蝴蝶", "帐篷", "魔方", "甜甜圈", "消防车", "海豚",
-]
 
 GAME_META = {
     "gomoku": {"name": "五子棋", "min": 2, "max": 2, "desc": "15×15 传统五子棋，五连即胜"},
     "tictactoe": {"name": "井字棋", "min": 2, "max": 2, "desc": "三连成一线的经典小游戏"},
     "draw": {"name": "你画我猜", "min": 2, "max": 10, "desc": "轮流作画，谁先猜中谁加分"},
     "bomb": {"name": "数字炸弹", "min": 2, "max": 12, "desc": "轮流报数缩小范围，踩中炸弹的人输"},
-    "go": {"name": "围棋", "min": 2, "max": 2, "desc": "9 路棋盘 · 中国规则数子 · 黑贴 7.5 目"},
+    "go": {"name": "围棋", "min": 2, "max": 2, "desc": "9 路 / 19 路可选 · 中国规则数子 · 黑贴 7.5 目"},
     "xiangqi": {"name": "象棋", "min": 2, "max": 2, "desc": "标准中国象棋 · 将死或困毙即胜"},
     "werewolf": {"name": "狼人杀", "min": ww.MIN_PLAYERS, "max": ww.MAX_PLAYERS,
                  "desc": "6~12 人正规板子 · 预女猎白 · 狼刀+验人+用药+投票放逐"},
@@ -77,8 +73,9 @@ def player_view(conn):
 
 
 class Room:
-    def __init__(self, game, host, code=None):
+    def __init__(self, game, host, code=None, opts=None):
         self.left_names = {}
+        self.opts = dict(opts or {})   # 建房时可选项：目前只有围棋棋盘大小 size(9/19)
         self.id = code if code and code not in ROOMS else new_room_code()
         self.game = game
         self.host = host.uid
@@ -283,10 +280,12 @@ class Room:
         seats = [player_view(c) for c in self.seats]
         state = self.state
         if self.game == "draw":
-            state = {k: v for k, v in self.state.items() if k != "order"}
+            state = {k: v for k, v in self.state.items() if k not in ("order", "deck", "deck_i")}
             state["round_seconds"] = draw_seconds()
             state["rounds_per_player"] = DRAW_ROUNDS_PER_PLAYER
             state["draw_left"] = len(draw_remaining(self))     # 还没画满两轮的人数
+            state["words_total"] = len(WORDS)
+            state["words_used"] = int(self.state.get("deck_i", 0))
             if not self.finished:
                 is_drawer = viewer is not None and viewer.uid == self.state.get("drawer")
                 if not is_drawer:
@@ -308,6 +307,8 @@ class Room:
             "max": GAME_META[self.game]["max"],
             "rematch": sorted(self.rematch),
             "can_join": self.seat_available(),
+            "opts": dict(self.opts),
+            "board_size": self.opts.get("size"),
             "name": GAME_META[self.game]["name"],
             "host": self.host,
             "host_name": next((c.user["name"] for c in self.members if c.uid == self.host), ""),
@@ -403,6 +404,7 @@ def list_rooms():
             "started": room.started,
             "finished": room.finished,
             "can_join": room.seat_available(),
+            "opts": dict(room.opts),
             "host": room.host,
             "host_name": next((c.user["name"] for c in room.members if c.uid == room.host), ""),
             "started_names": [c.user["name"] for c in room.seats],
@@ -493,22 +495,35 @@ async def board_move(room, conn, msg):
 
 
 # ---------------------------------------------------------------- 围棋
+GO_SIZES = (9, 19)
+
+
+def go_size(room):
+    """建房时选的棋盘大小，只认 9 / 19，没选就按 9 路。"""
+    try:
+        size = int(room.opts.get("size") or bgl.GO_SIZE)
+    except (TypeError, ValueError):
+        size = bgl.GO_SIZE
+    return size if size in GO_SIZES else bgl.GO_SIZE
+
+
 async def start_go(room):
     room.started = True
     room.finished = False
+    size = go_size(room)
     room.state = {
         "status": "playing",
-        "size": bgl.GO_SIZE,
-        "cols": bgl.GO_SIZE,
-        "rows": bgl.GO_SIZE,
-        "board": bgl.go_new_board(),
+        "size": size,
+        "cols": size,
+        "rows": size,
+        "board": bgl.go_new_board(size),
         "turn": room.seats[0].uid,
         "marks": {str(room.seats[0].uid): 1, str(room.seats[1].uid): 2},
         "last": None,
         "move_count": 0,
         "passes": 0,
         "captures": {"1": 0, "2": 0},
-        "history": [bgl.go_new_board()],
+        "history": [bgl.go_new_board(size)],
         "komi": bgl.GO_KOMI,
     }
     await room.push("game.state")
@@ -524,7 +539,7 @@ async def _go_switch(room):
 
 async def go_finish(room, reason):
     state = room.state
-    black, white = bgl.go_score(state["board"])
+    black, white = bgl.go_score(state["board"], state.get("size", bgl.GO_SIZE), state.get("komi", bgl.GO_KOMI))
     state["score"] = {"black": black, "white": white, "komi": bgl.GO_KOMI}
     black_uid = next((c.uid for c in room.seats if state["marks"].get(str(c.uid)) == 1), 0)
     white_uid = next((c.uid for c in room.seats if state["marks"].get(str(c.uid)) == 2), 0)
@@ -567,7 +582,7 @@ async def go_move(room, conn, msg):
         await room.push("game.update")
         return
     index = int(msg.get("index", -1))
-    placed = bgl.go_place(state["board"], index, color)
+    placed = bgl.go_place(state["board"], index, color, state.get("size", bgl.GO_SIZE))
     if placed is None:
         await room.send_to(conn, {"t": "game.event", "text": "这里不能落子（已有子或自杀）"})
         return
@@ -654,15 +669,26 @@ async def xq_move(room, conn, msg):
     state["turn"] = opponents[0] if opponents else conn.uid
     status = bgl.xq_status(state["board"], not red)
     state["check"] = status in ("check", "checkmate")
+    if status in ("check", "checkmate"):
+        # 给客户端一个"将军 / 绝杀"动画信号：seq 每次变化就播一次，两边都能看到
+        seq = int(state.get("alert_seq", 0)) + 1
+        state["alert_seq"] = seq
+        state["alert"] = {"kind": "mate" if status == "checkmate" else "check",
+                          "seq": seq, "uid": conn.uid, "name": conn.user["name"]}
+    other = room.name_of(opponents[0]) if opponents else "对手"
     if status == "checkmate":
         mate = bgl.xq_in_check(state["board"], not red)
         await room.push("game.update")
+        await room.broadcast({"t": "game.event",
+                              "text": "绝杀！%s%s" % (conn.user["name"],
+                                                     "将死了 %s" % other if mate else "困毙了 %s" % other)})
+        await asyncio.sleep(1.8)           # 先让"绝杀"动画播完，再弹结算面板
         await room.finish(winners=[conn.uid],
                           reason="%s %s" % (conn.user["name"], "将死对手" if mate else "困毙对手"))
         return
     await room.push("game.update")
     if status == "check":
-        await room.broadcast({"t": "game.event", "text": "将军！"})
+        await room.broadcast({"t": "game.event", "text": "将军！%s 将了 %s 一军" % (conn.user["name"], other)})
 
 
 async def restart(room):
@@ -728,13 +754,27 @@ def draw_remaining(room):
     return [u for u in draw_sync_order(room) if draw_done_count(room, u) < DRAW_ROUNDS_PER_PLAYER]
 
 
+def _draw_deck():
+    """洗一副词牌（不放回抽取；发完了再洗一副接着用）。"""
+    deck = list(WORDS)
+    random.shuffle(deck)
+    return deck
+
+
 def draw_begin_round(room, index):
-    """开始新一轮：换画手、换词、清空画布和猜中名单。"""
+    """开始新一轮：换画手、从词牌堆里**不放回**取一个词、清空画布和猜中名单。"""
     state = room.state
     order = state["order"]
     state["turn_index"] = index
     state["drawer"] = order[index]
-    state["word"] = random.choice(WORDS)
+    deck = state.get("deck") or []
+    i = int(state.get("deck_i", 0))
+    if i >= len(deck):                     # 词用光了就重新洗一副（超长局也不会卡住）
+        deck = _draw_deck()
+        i = 0
+    state["deck"] = deck
+    state["deck_i"] = i + 1
+    state["word"] = deck[i]
     state["masked"] = "_" * len(state["word"])
     state["guessed"] = []
     state["strokes"] = []
@@ -760,6 +800,8 @@ async def draw_start(room, conn=None):
         "masked": "",
         "scores": {str(c.uid): 0 for c in room.seats},
         "draws": {},
+        "deck": _draw_deck(),              # 不放回抽词：一副洗好的词牌
+        "deck_i": 0,
         "guessed": [],
         "strokes": [],
         "round": 1,
@@ -827,6 +869,8 @@ async def draw_next_round(room, reason="本轮结束"):
 async def draw_guess(room, conn, text):
     if not room.started or room.finished or conn.uid == room.state.get("drawer"):
         return False
+    if room.seat_index(conn.uid) < 0:
+        return False                       # 观战者只讨论、不计分
     word = room.state["word"]
     if conn.uid in room.state["guessed"]:
         return False
@@ -951,8 +995,16 @@ async def handle(conn, action, msg):
         if code and code in ROOMS:
             await conn.send({"t": "game.error", "text": "房间号 %s 已被占用" % code})
             return
+        opts = {}
+        if game == "go":                       # 围棋可选 9 路 / 19 路
+            try:
+                size = int(msg.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            if size in GO_SIZES:
+                opts["size"] = size
         await leave_other_rooms(conn)
-        room = Room(game, conn, code)
+        room = Room(game, conn, code, opts=opts)
         ROOMS[room.id] = room
         await room.add(conn, as_player=True)
         await conn.send({"t": "game.entered", "room": room.public_state(conn), "meta": GAME_META[game]})
@@ -1031,8 +1083,14 @@ async def handle(conn, action, msg):
         if not text:
             return
         if room.game == "draw":
-            await room.broadcast({"t": "game.chat", "chat": {"name": conn.user["name"], "text": text}})
-            await draw_guess(room, conn, text)
+            # 猜对了先结算，再把这条聊天改成 *** 发出去，答案不会从聊天里泄露
+            seat = room.seat_index(conn.uid) >= 0
+            correct = await draw_guess(room, conn, text)
+            await room.broadcast({"t": "game.chat", "room": room.id,
+                                  "chat": {"uid": conn.uid, "name": conn.user["name"],
+                                           "avatar": conn.user.get("avatar") or "",
+                                           "text": "***" if correct else text,
+                                           "correct": bool(correct), "spec": 0 if seat else 1}})
         elif room.game == "bomb":
             try:
                 number = int(text)
@@ -1042,7 +1100,14 @@ async def handle(conn, action, msg):
             await bomb_guess(room, conn, number)
         return
     if action == "chat":
-        await room.broadcast({"t": "game.chat", "chat": {"name": conn.user["name"], "text": (msg.get("text") or "")[:200]}})
+        text = (msg.get("text") or "")[:200]
+        if not text.strip():
+            return
+        seat = room.seat_index(conn.uid) >= 0
+        await room.broadcast({"t": "game.chat", "room": room.id,
+                              "chat": {"uid": conn.uid, "name": conn.user["name"],
+                                       "avatar": conn.user.get("avatar") or "",
+                                       "text": text, "spec": 0 if seat else 1}})
         return
     if action == "kick" and (conn.uid == room.host or conn.user.get("role") == "admin"):
         target = int(msg.get("uid") or 0)

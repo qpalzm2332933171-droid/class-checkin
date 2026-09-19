@@ -13,6 +13,7 @@ const BLACK = { 1: "将", 2: "士", 3: "象", 4: "马", 5: "车", 6: "炮", 7: "
 registerRoute("/games/xiangqi", defineView("gameXiangqi", {
   template: `
   <div class="page-plain">
+    <MatchChat />
     <header class="row gap3 head">
       <button class="btn btn-icon glass glass-thin" @click="leaveRoom(false)"><Icon n="back" :size="20" /></button>
       <div class="grow">
@@ -43,7 +44,7 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
     <p v-if="isSpectator" class="chip chip-orange mt4">观战模式</p>
     <p v-if="inCheck && room?.started && !finished" class="chip chip-red mt4">将军！</p>
 
-    <div class="xq-wrap">
+    <div class="xq-wrap" :class="{ shake: !!fx }">
       <div class="xq-board glass glass-liquid" :style="{ '--cols': cols, '--rows': rows }">
         <span class="xq-lines" aria-hidden="true"></span>
         <button v-for="pt in points" :key="pt.i" class="xq-cell"
@@ -79,6 +80,13 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
       </template>
       <button v-if="spectators.length" class="btn">{{ spectators.length }} 人围观</button>
     </div>
+
+    <Transition name="fade">
+      <div v-if="fx" class="xq-fx" :class="fx" aria-hidden="true">
+        <span class="xq-ink"></span>
+        <b class="xq-word">{{ fxLabel }}</b>
+      </div>
+    </Transition>
 
     <div v-if="notice" class="rematch-bar mt4" :class="{ want: othersWantRematch }">{{ notice }}</div>
     <Transition name="mat">
@@ -132,6 +140,38 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
     text-align: center; font-size: clamp(11px, 3.2vw, 15px); letter-spacing: 0.5em;
     color: color-mix(in srgb, var(--ink-3) 55%, transparent); pointer-events: none; }
   .chip-red { background: color-mix(in srgb, #ff3b30 22%, transparent); color: #ff453a; font-weight: 700; }
+  .xq-fx { position: fixed; inset: 0; z-index: 46; display: grid; place-items: center; pointer-events: none; }
+  .xq-ink { position: absolute; width: 68vmin; height: 68vmin; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,59,48,.42), rgba(255,59,48,.12) 55%, rgba(255,59,48,0) 72%);
+    animation: xq-ink 2.3s cubic-bezier(.2,.8,.2,1) forwards; }
+  .xq-word { position: relative; font-size: 21vmin; font-weight: 900; color: #ff3b30; letter-spacing: .04em;
+    text-shadow: 0 4px 26px rgba(255,59,48,.6), 0 1px 2px rgba(0,0,0,.35);
+    animation: xq-stamp 2.3s cubic-bezier(.18,.9,.22,1) forwards; }
+  .xq-fx.mate .xq-word { font-size: 27vmin; color: #ff2d1a; }
+  .xq-fx.mate .xq-ink { width: 88vmin; height: 88vmin; }
+  .xq-wrap.shake { animation: xq-shake .52s cubic-bezier(.36,.07,.19,.97) 2; }
+  @keyframes xq-ink {
+    0% { transform: scale(.25); opacity: 0; }
+    16% { opacity: 1; }
+    100% { transform: scale(1.3); opacity: 0; }
+  }
+  @keyframes xq-stamp {
+    0% { transform: scale(2.6) rotate(-9deg); opacity: 0; }
+    20% { transform: scale(.9) rotate(2.5deg); opacity: 1; }
+    34% { transform: scale(1.03) rotate(-1deg); }
+    52% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.05); opacity: 0; }
+  }
+  @keyframes xq-shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-7px); }
+    50% { transform: translateX(6px); }
+    80% { transform: translateX(-3px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .xq-ink, .xq-word { animation-duration: 2.6s; }
+    .xq-wrap.shake { animation: none; }
+  }
   .overlay { position: fixed; inset: auto 0 0 0; margin: auto; top: 0; height: fit-content;
     width: min(440px, calc(100vw - 32px)); padding: var(--s6); border-radius: var(--r-xl); z-index: 62; text-align: center; }
   `,
@@ -165,6 +205,29 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
     const isMyTurn = computed(() => roomApi.room.value?.state?.turn === store.user?.id);
     const inCheck = computed(() => !!roomApi.room.value?.state?.check);
     const lastMove = computed(() => roomApi.room.value?.state?.last || null);
+
+    /* 将军 / 绝杀 动画：服务端每次判定都把 alert.seq +1，客户端只认序号变化 */
+    const fx = ref("");
+    const fxLabel = ref("将军");
+    let fxTimer = null;
+    let lastAlertSeq = 0;
+    function playFx(kind) {
+      fx.value = "";
+      fxLabel.value = kind === "mate" ? "绝杀" : "将军";
+      requestAnimationFrame(() => {
+        fx.value = kind === "mate" ? "mate" : "check";
+        haptic(kind === "mate" ? [30, 60, 30, 60, 40] : [18, 40, 18]);
+        if (fxTimer) clearTimeout(fxTimer);
+        fxTimer = setTimeout(() => { fx.value = ""; }, 2400);
+      });
+    }
+    const readAlert = () => (roomApi.room.value && roomApi.room.value.state && roomApi.room.value.state.alert) || null;
+    const unwatchFx = watch(() => { const a = readAlert(); return a ? a.seq : 0; }, () => {
+      const alert = readAlert();
+      if (!alert || !alert.seq || alert.seq === lastAlertSeq) return;
+      lastAlertSeq = alert.seq;
+      playFx(alert.kind);
+    });
 
     const statusText = computed(() => {
       if (!roomApi.room.value) return "连接中…";
@@ -237,9 +300,14 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
         .then((yes) => { if (yes) wsSend({ t: "game.move", resign: true }); });
     }
 
-    onUnmounted(() => { if (unwatch) unwatch(); });
+    onUnmounted(() => {
+      if (unwatch) unwatch();
+      if (unwatchFx) unwatchFx();
+      if (fxTimer) clearTimeout(fxTimer);
+    });
 
     return { ...roomApi, board, cols, rows, selected, points, players, finished, isSpectator,
-             statusText, resultTitle, resultReason, glyph, labelOf, sideOf, isTurn, isLast, tap, resign, mediaUrl };
+             statusText, resultTitle, resultReason, glyph, labelOf, sideOf, isTurn, isLast, tap, resign, mediaUrl,
+             fx, fxLabel };
   },
 }));

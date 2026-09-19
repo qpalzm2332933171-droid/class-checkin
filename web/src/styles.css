@@ -615,3 +615,49 @@ button.list-row.tap:active { background: var(--accent-soft); }
   max-width: calc(100% - 108px); padding: 5px 11px; border-radius: 999px; font-size: 11px;
   color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(10px); pointer-events: none; }
+
+/* ---------------------------------------------------------------- 观战弹幕（穿透层，不挡操作） */
+.danmaku-layer { position: fixed; left: 0; right: 0; top: 11vh; height: 0; z-index: 44; pointer-events: none; overflow: visible; }
+.danmaku { position: absolute; right: 0; display: inline-flex; align-items: center; gap: 8px;
+  max-width: 88vw; padding: 8px 15px; border-radius: var(--r-full); white-space: nowrap;
+  background: color-mix(in srgb, var(--mat-thick) 92%, transparent);
+  -webkit-backdrop-filter: blur(var(--blur-thin)) saturate(var(--sat));
+  backdrop-filter: blur(var(--blur-thin)) saturate(var(--sat));
+  box-shadow: var(--shadow-2), inset 0 1px 0 var(--edge);
+  font-size: var(--fs-sub); color: var(--ink); will-change: transform;
+  animation: danmaku-fly 11s linear forwards; }
+.danmaku b { font-weight: 650; color: var(--accent); }
+.danmaku span { overflow: hidden; text-overflow: ellipsis; }
+@keyframes danmaku-fly {
+  from { transform: translateX(102%); opacity: 0; }
+  6%   { opacity: 1; }
+  90%  { opacity: 1; }
+  to   { transform: translateX(calc(-100vw - 100%)); opacity: 0.9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .danmaku { animation-duration: 16s; }
+}
+
+/* ---------------------------------------------------------------- 对局讨论（任何联机游戏都能发言） */
+.mc-fab { position: fixed; right: var(--s4); bottom: calc(var(--safe-b) + 78px); z-index: 26;
+  display: inline-flex; align-items: center; gap: 7px; padding: 11px 16px; border-radius: var(--r-full);
+  font-size: var(--fs-sub); font-weight: 600; color: var(--ink); }
+.mc-fab:active { transform: scale(0.95); }
+.mc-fab.live { box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent); }
+.mc-dot { position: absolute; top: -4px; right: -4px; min-width: 19px; height: 19px; padding: 0 5px;
+  display: grid; place-items: center; border-radius: var(--r-full); background: var(--red); color: #fff;
+  font-size: 11px; font-style: normal; font-weight: 700; }
+.mc-sheet { position: fixed; left: var(--s4); right: var(--s4); bottom: calc(var(--safe-b) + var(--s4));
+  z-index: 62; display: flex; flex-direction: column; max-height: min(62dvh, 520px);
+  padding: var(--s4); border-radius: var(--r-xl); }
+.mc-head { display: flex; align-items: center; gap: var(--s3); padding-bottom: var(--s3); }
+.mc-head b { font-size: var(--fs-callout); font-weight: 650; }
+.mc-list { flex: 1; min-height: 130px; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  display: flex; flex-direction: column; gap: 10px; padding: 4px 0 var(--s3); }
+.mc-empty { padding: var(--s6) 0; }
+.mc-row { display: flex; gap: 9px; align-items: flex-start; }
+.mc-text { font-size: var(--fs-sub); line-height: 1.42; word-break: break-word; }
+.mc-row.me .mc-text { color: var(--accent); }
+.mc-row.spec .mc-text { color: var(--ink-2); }
+.mc-form { display: flex; gap: 9px; padding-top: var(--s3); border-top: 1px solid var(--hair); }
+.mc-form .field { flex: 1; }

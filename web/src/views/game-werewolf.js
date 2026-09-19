@@ -15,6 +15,7 @@ const STEP_TEXT = {
 registerRoute("/games/werewolf", defineView("gameWerewolf", {
   template: `
   <div class="page-plain">
+    <MatchChat />
     <header class="row gap3 head">
       <button class="btn btn-icon glass glass-thin" @click="leaveRoom(false)"><Icon n="back" :size="20" /></button>
       <div class="grow">

@@ -6,6 +6,7 @@ import {
   loadAnnouncements, ackAnnouncements, isApp, confirmDialog,
 } from "./ui.js";
 import { Icon } from "./icons.js";
+import { MatchChat } from "./matchchat.js";
 
 import "./views/login.js";
 import "./views/home.js";
@@ -61,6 +62,28 @@ const Root = {
       return p.startsWith("/games/");
     });
     const slideName = computed(() => (store.navDir > 0 ? "page-slide-left" : "page-slide-right"));
+
+    /* ------------------------------------------------------- 观战弹幕
+       观战同学在"对局讨论"里发的话，会以弹幕飘过正在比赛的玩家屏幕。
+       只在"我在座位上 + 本局正在进行"时才飘，层本身 pointer-events:none，不影响操作。 */
+    const danmaku = ref([]);
+    let danmakuSeq = 0;
+    let liveRoom = null;
+
+    function noteLiveRoom(msg) { if (msg && msg.room) liveRoom = msg.room; }
+
+    function fanOut(chat) {
+      if (!chat || !chat.spec) return;                       // 只有观战者的发言飘弹幕
+      const uid = store.user && store.user.id;
+      if (!uid || !liveRoom || !liveRoom.started || liveRoom.finished) return;
+      if (!(liveRoom.players || []).some((p) => p.uid === uid)) return;
+      const text = String(chat.text || "").slice(0, 60);
+      if (!text) return;
+      const id = ++danmakuSeq;
+      danmaku.value.push({ id, name: chat.name || "观战", text, lane: id % 3 });
+      while (danmaku.value.length > 6) danmaku.value.shift();
+      setTimeout(() => { danmaku.value = danmaku.value.filter((d) => d.id !== id); }, 12000);
+    }
 
     /* ------------------------------------------------------- 版本检查 */
     function installedCode() {
@@ -431,6 +454,12 @@ const Root = {
           haptic(msg.delta > 0 ? [10, 30, 10] : 20);
         }
       });
+      onWs("game.entered", noteLiveRoom);
+      onWs("game.state", noteLiveRoom);
+      onWs("game.update", noteLiveRoom);
+      onWs("game.over", noteLiveRoom);
+      onWs("game.left", () => { liveRoom = null; });
+      onWs("game.chat", (msg) => fanOut(msg.chat));
       onWs("announce", (msg) => {
         const item = { id: msg.id, content: msg.content, created_at: msg.created_at, author: msg.author || "班级公告", read: false };
         store.announcements = [item].concat(store.announcements || []);
@@ -515,7 +544,7 @@ const Root = {
 
     return { booting, view, isLogin, tabs, activeTab, tabHidden, slideName, store, hostEl, paneEls, paneAnim, dragging, paged, panes, paneStyle,
              resolveConfirm, closeAnnounce, openAnnounce, fmtWhen, tabClick,
-             checkUpdate, runUpdate, dismissUpdate, installedCode };
+             checkUpdate, runUpdate, dismissUpdate, installedCode, danmaku };
   },
   template: `
   <div class="app" :class="{ 'tab-hidden': tabHidden }">
@@ -533,6 +562,12 @@ const Root = {
           <component :is="view" v-if="view" :key="$route.path" />
           <div v-else class="page-plain center" style="min-height:60dvh">页面不存在</div>
         </Transition>
+      </div>
+
+      <div class="danmaku-layer" aria-hidden="true">
+        <div v-for="d in danmaku" :key="d.id" class="danmaku" :style="{ top: (14 + d.lane * 34) + 'px' }">
+          <b>{{ d.name }}</b><span>{{ d.text }}</span>
+        </div>
       </div>
 
       <nav class="tabbar" v-if="store.user && !isLogin">
@@ -604,6 +639,7 @@ const Root = {
 
 const app = createApp(Root);
 app.component("Icon", Icon);
+app.component("MatchChat", MatchChat);
 app.config.globalProperties.$route = route;
 app.config.globalProperties.$store = store;
 app.mount("#app");
