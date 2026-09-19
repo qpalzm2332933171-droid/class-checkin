@@ -6,6 +6,7 @@ import { useRoom } from "../room.js";
 
 const COLORS = ["#1c1c1e", "#ff3b30", "#ff9500", "#34c759", "#0a84ff", "#af52de"];
 const SIZES = [3, 7, 14];
+const ERASER_SIZES = [14, 26, 40];
 
 registerRoute("/games/draw", defineView("gameDraw", {
   template: `
@@ -34,15 +35,23 @@ registerRoute("/games/draw", defineView("gameDraw", {
     </div>
 
     <div v-if="revealed" class="gd-reveal glass glass-thin mt3">答案是「{{ revealed }}」</div>
+    <p v-if="playing" class="cap mt2 gd-progress">
+      每人画 {{ state.rounds_per_player || 2 }} 轮 · 还有 {{ state.draw_left || 0 }} 人没画满
+    </p>
 
     <div class="gd-board glass glass-thin mt3">
       <canvas ref="cv" class="gd-cv" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"></canvas>
       <div v-if="isDrawer && playing" class="gd-tools">
-        <button v-for="c in colors" :key="c" class="gd-sw" :class="{ on: color === c }" :style="{ background: c }"
-                @click="color = c; haptic(6)"></button>
+        <button v-for="c in colors" :key="c" class="gd-sw" :class="{ on: color === c && !eraser }" :style="{ background: c }"
+                @click="pickColor(c)"></button>
         <span class="gd-div"></span>
-        <button v-for="s in sizes" :key="s" class="gd-sz" :class="{ on: size === s }" @click="size = s; haptic(6)">
-          <i :style="{ width: s + 3 + 'px', height: s + 3 + 'px' }"></i>
+        <button class="gd-tool" :class="{ on: eraser }" title="橡皮" aria-label="橡皮" @click="toggleEraser">
+          <Icon n="eraser" :size="17" />
+        </button>
+        <span class="gd-div"></span>
+        <button v-for="s in activeSizes" :key="s" class="gd-sz" :class="{ on: activeSize === s && !eraser }"
+                @click="pickSize(s)">
+          <i :style="{ width: szDot(s) + 'px', height: szDot(s) + 'px' }"></i>
         </button>
         <span class="grow"></span>
         <button class="btn btn-icon glass glass-thin" title="撤销" @click="undo"><Icon n="back" :size="17" /></button>
@@ -117,6 +126,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-timer b { font-size: var(--fs-foot); }
   .gd-timer.urgent .gd-ring .bar { stroke: var(--orange); }
   .gd-timer.urgent b { color: var(--orange); }
+  .gd-progress { color: var(--ink-3); }
   .gd-reveal { padding: var(--s3) var(--s4); border-radius: var(--r-md); text-align: center; font-weight: 600; }
   .gd-board { position: relative; border-radius: var(--r-lg); overflow: hidden; }
   .gd-cv { display: block; width: 100%; aspect-ratio: 4 / 3; touch-action: none; background: #fff; }
@@ -126,6 +136,9 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-sz { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; }
   .gd-sz.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
   .gd-sz i { display: block; border-radius: 50%; background: var(--ink); }
+  .gd-tool { height: 30px; min-width: 30px; padding: 0 5px; display: grid; place-items: center;
+    border-radius: 15px; color: var(--ink-2); }
+  .gd-tool.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
   .gd-div { width: 1px; height: 20px; background: var(--hair); }
   .gd-empty { padding: var(--s5); text-align: center; }
   .gd-feed { padding: var(--s2) var(--s4); max-height: 168px; overflow-y: auto; border-radius: var(--r-lg); }
@@ -147,6 +160,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     const draft = ref("");
     const color = ref(COLORS[0]);
     const size = ref(SIZES[1]);
+    const eraser = ref(false);
+    const esize = ref(ERASER_SIZES[1]);
     const left = ref(75);
     let ctx = null;
     let drawing = false;
@@ -155,6 +170,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     let stops = [];
     let ticker = null;
 
+    const activeSizes = computed(() => (eraser.value ? ERASER_SIZES : SIZES));
+    const activeSize = computed(() => (eraser.value ? esize.value : size.value));
     const me = computed(() => store.user?.id);
     const isDrawer = computed(() => state.value.drawer === me.value);
     const playing = computed(() => state.value.status === "playing");
@@ -163,7 +180,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     const solvedByMe = computed(() => guessed.value.includes(me.value));
     const canStart = computed(() => !playing.value && players.value.length >= 2);
     const isSpectator = roomApi.isSpectator;
-    const ratio = computed(() => Math.max(0, Math.min(1, left.value / 75)));
+    const roundSeconds = computed(() => Math.max(1, state.value.round_seconds || 75));
+    const ratio = computed(() => Math.max(0, Math.min(1, left.value / roundSeconds.value)));
     const ranked = computed(() => {
       const scores = state.value.scores || {};
       return players.value.map((p) => ({ ...p, score: scores[String(p.uid)] || 0 }))
@@ -199,12 +217,15 @@ registerRoute("/games/draw", defineView("gameDraw", {
       const el = cv.value;
       const w = el.clientWidth || 320;
       const h = el.clientHeight || 240;
+      const prev = ctx.globalCompositeOperation;
+      if (seg.e) ctx.globalCompositeOperation = "destination-out";
       ctx.strokeStyle = seg.c || "#1c1c1e";
       ctx.lineWidth = seg.w || 4;
       ctx.beginPath();
       ctx.moveTo(seg.x1 * w, seg.y1 * h);
       ctx.lineTo(seg.x2 * w, seg.y2 * h);
       ctx.stroke();
+      ctx.globalCompositeOperation = prev;
     }
 
     function clearAll(silent) {
@@ -241,7 +262,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
       if (!drawing) return;
       ev.preventDefault();
       const p = point(ev);
-      const seg = { x1: last.x, y1: last.y, x2: p.x, y2: p.y, c: color.value, w: size.value };
+      const seg = { x1: last.x, y1: last.y, x2: p.x, y2: p.y, c: color.value,
+                    w: eraser.value ? esize.value : size.value, e: eraser.value ? 1 : 0 };
       last = p;
       strokes.push(seg);
       paint(seg);
@@ -254,6 +276,11 @@ registerRoute("/games/draw", defineView("gameDraw", {
       drawing = false;
       try { cv.value.releasePointerCapture(ev.pointerId); } catch (e) {}
     }
+
+    function szDot(s) { return Math.round(Math.min(22, 3 + s * 0.9)); }
+    function pickColor(c) { color.value = c; eraser.value = false; haptic(6); }
+    function toggleEraser() { eraser.value = !eraser.value; haptic(8); }
+    function pickSize(s) { if (eraser.value) esize.value = s; else size.value = s; haptic(6); }
 
     function start() { wsSend({ t: "game.start" }); haptic(12); }
 
@@ -279,7 +306,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
 
     function tick() {
       const dl = state.value.deadline || 0;
-      left.value = dl ? Math.max(0, Math.round(dl - Date.now() / 1000)) : 75;
+      left.value = dl ? Math.max(0, Math.round(dl - Date.now() / 1000)) : roundSeconds.value;
     }
 
     const unwatch = watch(roomApi.room, (next) => { if (next) applyRoom(next); }, { immediate: true });
@@ -313,7 +340,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     });
 
     return { ...roomApi, cv, state, players, feed, finished, winners, draft, color, size, left, isSpectator,
-             colors: COLORS, sizes: SIZES, isDrawer, playing, revealed, solvedByMe, canStart, ratio,
+             colors: COLORS, sizes: SIZES, eraser, activeSizes, activeSize, szDot, pickColor, toggleEraser, pickSize,
+             isDrawer, playing, revealed, solvedByMe, canStart, ratio, roundSeconds,
              ranked, iWon, statusText, down, move, up, undo, clearAll, start, send, store, mediaUrl };
   },
 }));

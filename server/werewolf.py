@@ -23,6 +23,7 @@
 
 import random
 
+import db
 from util import now
 
 ROLES = {
@@ -51,9 +52,19 @@ NIGHT_SECONDS = 50          # 狼人刀人
 SEER_SECONDS = 30           # 预言家验人
 WITCH_SECONDS = 35          # 女巫用药
 ANNOUNCE_SECONDS = 22       # 公布死讯
+STEP_PAUSE = 5              # 全员行动完之后停几秒再进下一阶段（别跳太快）
 HUNTER_SECONDS = 30         # 猎人开枪
 SPEAK_SECONDS = 90          # 白天发言
 VOTE_SECONDS = 45           # 放逐投票
+
+
+def secs(base):
+    """阶段时长（秒）。db 里把 ww_speed 调大可以整体加速（测试/快节奏模式用）。"""
+    try:
+        speed = max(1, int(db.setting("ww_speed", 1) or 1))
+    except Exception:  # noqa: BLE001  (数据库异常也不能把对局卡死)
+        speed = 1
+    return max(5, int(base) // speed)
 
 
 def board_for(count):
@@ -279,15 +290,19 @@ async def enter_night(room):
     state["poisoned"] = []
     state["votes"] = {}
     state["vote_result"] = None
-    state["deadline"] = now() + NIGHT_SECONDS
-    await announce(room, "🌙 第 %d 夜 · 天黑请闭眼（狼人先刀人）" % state["day"])
+    state["deadline"] = now() + secs(NIGHT_SECONDS)
+    state["hold_until"] = 0
+    await announce(room, "🌙 第 %d 夜 · 天黑请闭眼，全体闭眼" % state["day"])
+    await announce(room, "🐺 狼人请睁眼，商量今晚要刀谁（%d 秒）" % secs(NIGHT_SECONDS))
 
 
 async def enter_seer(room):
     state = room.state
     state["step"] = "seer"
-    state["deadline"] = now() + SEER_SECONDS
+    state["hold_until"] = 0
+    state["deadline"] = now() + secs(SEER_SECONDS)
     seer = alive_with_role(state, "seer")
+    await announce(room, "🐺 狼人请闭眼。🔮 预言家请睁眼，选择要验的人（%d 秒）" % secs(SEER_SECONDS))
     if not seer:
         await enter_witch(room)
         return
@@ -298,10 +313,12 @@ async def enter_seer(room):
 async def enter_witch(room):
     state = room.state
     state["step"] = "witch"
-    state["deadline"] = now() + WITCH_SECONDS
+    state["hold_until"] = 0
+    state["deadline"] = now() + secs(WITCH_SECONDS)
     state["witch"]["seen"] = state["night_kill"]
     state["witch"]["done"] = False
     witch = alive_with_role(state, "witch")
+    await announce(room, "🔮 预言家请闭眼。🧪 女巫请睁眼（%d 秒）" % secs(WITCH_SECONDS))
     if not witch:
         await resolve_night(room)
         return
@@ -327,6 +344,7 @@ async def resolve_night(room):
         state["alive"][str(uid)] = False
     state["last_deaths"] = deaths
     state["phase"] = "day"
+    state["hold_until"] = 0
 
     names = [state["names"].get(str(u), "?") for u in deaths]
     if not names:
@@ -350,11 +368,12 @@ async def enter_hunter(room, uid, resume):
     state = room.state
     state["step"] = "hunter"
     state["hunter"] = {"uid": uid, "target": 0, "done": False, "resume": resume}
-    state["deadline"] = now() + HUNTER_SECONDS
+    state["hold_until"] = 0
+    state["deadline"] = now() + secs(HUNTER_SECONDS)
     await room.push("game.state")
     await room.broadcast({"t": "game.event",
                           "text": "🔫 %s 是猎人，可以开枪带走一个人（%d 秒内选择）"
-                                  % (state["names"].get(str(uid), "有人"), HUNTER_SECONDS)})
+                                  % (state["names"].get(str(uid), "有人"), secs(HUNTER_SECONDS))})
     await room.send_to(room.seat_of(uid), {"t": "game.event", "text": "🔫 你是猎人，请选择带走谁（也可以放弃）"})
 
 
@@ -383,18 +402,20 @@ async def enter_speak(room):
     state = room.state
     state["phase"] = "day"
     state["step"] = "speak"
-    state["deadline"] = now() + SPEAK_SECONDS
+    state["hold_until"] = 0
+    state["deadline"] = now() + secs(SPEAK_SECONDS)
     state["votes"] = {}
     state["vote_result"] = None
-    await announce(room, "💬 白天讨论 %d 秒，然后投票放逐" % SPEAK_SECONDS)
+    await announce(room, "💬 天亮了，白天讨论 %d 秒，然后投票放逐" % secs(SPEAK_SECONDS))
 
 
 async def enter_vote(room):
     state = room.state
     state["step"] = "vote"
-    state["deadline"] = now() + VOTE_SECONDS
+    state["hold_until"] = 0
+    state["deadline"] = now() + secs(VOTE_SECONDS)
     state["votes"] = {}
-    await announce(room, "🗳️ 请投票放逐你认为的狼人（%d 秒，可弃票）" % VOTE_SECONDS)
+    await announce(room, "🗳️ 发言结束，请投票放逐你认为的狼人（%d 秒，可弃票）" % secs(VOTE_SECONDS))
 
 
 async def resolve_vote(room):
@@ -569,22 +590,45 @@ async def tick(room):
     step = state.get("step")
     overdue = now() >= state.get("deadline", 0)
 
+    async def hold():
+        """全员都行动完了：先停 STEP_PAUSE 秒把提示念完，再进下一阶段。"""
+        if not state.get("hold_until"):
+            state["hold_until"] = now() + STEP_PAUSE
+            await room.push("game.state")
+            return True
+        return now() < state["hold_until"]
+
     if step == "wolf":
         wolves = alive_with_role(state, "wolf")
         voted = [u for u in wolves if str(u) in state["wolf_votes"]]
-        if overdue or (wolves and len(voted) == len(wolves)):
+        done = bool(wolves) and len(voted) == len(wolves)
+        if done and not overdue and await hold():
+            return
+        if overdue or done:
+            state["hold_until"] = 0
             state["night_kill"] = wolf_target(state)
             if state["night_kill"]:
                 add_log(state, "🐺 狼人已经动了刀", "info")
             await enter_seer(room)
     elif step == "seer":
-        if overdue or state["seer"].get("done") or not alive_with_role(state, "seer"):
+        done = state["seer"].get("done") or not alive_with_role(state, "seer")
+        if done and not overdue and await hold():
+            return
+        if overdue or done:
+            state["hold_until"] = 0
             await enter_witch(room)
     elif step == "witch":
-        if overdue or state["witch"].get("done") or not alive_with_role(state, "witch"):
+        done = state["witch"].get("done") or not alive_with_role(state, "witch")
+        if done and not overdue and await hold():
+            return
+        if overdue or done:
+            state["hold_until"] = 0
             await resolve_night(room)
     elif step == "hunter":
+        if state["hunter"].get("done") and not overdue and await hold():
+            return
         if overdue or state["hunter"].get("done"):
+            state["hold_until"] = 0
             await resolve_hunter(room)
     elif step == "speak":
         if overdue:
@@ -593,5 +637,32 @@ async def tick(room):
         voters = [u for u in state["order"]
                   if state["alive"].get(str(u)) and state["can_vote"].get(str(u))]
         voted = [u for u in voters if str(u) in state["votes"]]
-        if overdue or (voters and len(voted) == len(voters)):
+        done = bool(voters) and len(voted) == len(voters)
+        if done and not overdue and await hold():
+            return
+        if overdue or done:
+            state["hold_until"] = 0
             await resolve_vote(room)
+
+
+# ---------------------------------------------------------------- 中途退出
+async def drop(room, uid, name):
+    """中途退出/掉线判负：直接算他出局（不能投票也不能开枪），可能直接分出胜负。"""
+    state = room.state
+    if not state.get("roles") or state.get("over"):
+        return False
+    uid = int(uid)
+    state["alive"][str(uid)] = False
+    state["can_vote"][str(uid)] = False
+    state["votes"].pop(str(uid), None)
+    state["wolf_votes"].pop(str(uid), None)
+    add_log(state, "🚪 %s 中途退出，直接出局" % name, "bad")
+    if state.get("hunter", {}).get("uid") == uid and not state["hunter"].get("done"):
+        state["hunter"]["done"] = True
+    wins, reason = check_over(state)
+    if wins is not None:
+        await end(room, wins, reason + "（有人中途退出）")
+        return True
+    await room.push("game.state")
+    await tick(room)
+    return False

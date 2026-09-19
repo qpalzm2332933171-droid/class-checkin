@@ -333,6 +333,9 @@ async def main():
         create_default_users()
     server = await asyncio.start_server(handle_connection, host, port)
     ws.start_background_tasks()
+    # 游戏对局的后台推进器：画猜倒计时、狼人杀阶段计时、掉线清理全靠它
+    import games
+    asyncio.ensure_future(games.ticker())
     log("check-in server listening on %s:%d  (web root: %s)" % (host, port, WEB_DIR))
     async with server:
         await asyncio.Event().wait()

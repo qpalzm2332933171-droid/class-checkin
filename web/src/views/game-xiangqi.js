@@ -45,16 +45,19 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
 
     <div class="xq-wrap">
       <div class="xq-board glass glass-liquid" :style="{ '--cols': cols, '--rows': rows }">
-        <button v-for="(cell, index) in board" :key="index" class="xq-cell"
-                :class="{ sel: selected === index, last: isLast(index), side: index % cols < 3 || index % cols > 5 }"
-                @click="tap(index)">
-          <span v-if="cell" class="xq-piece" :class="cell > 0 ? 'red' : 'black'">{{ glyph(cell) }}</span>
+        <span class="xq-lines" aria-hidden="true"></span>
+        <button v-for="pt in points" :key="pt.i" class="xq-cell"
+                :style="{ '--col': pt.col, '--row': pt.row }"
+                :class="{ sel: selected === pt.i, last: isLast(pt.i) }"
+                :aria-label="labelOf(pt)"
+                @click="tap(pt.i)">
+          <span v-if="pt.v" class="xq-piece" :class="pt.v > 0 ? 'red' : 'black'">{{ glyph(pt.v) }}</span>
         </button>
         <span class="xq-river" aria-hidden="true">楚河　汉界</span>
       </div>
     </div>
 
-    <p class="cap center mt3">{{ selected === null ? '点一下自己的棋子选中，再点目标格子' : '已选中，点目标格子落子（点别的子可以换）' }}</p>
+    <p class="cap center mt3">{{ selected === null ? '点自己的棋子选中，再点目标交叉点' : '已选中，点目标交叉点落子（点别的子可以换）' }}</p>
 
     <p v-if="canReady && !myReady" class="cap center mt4">双方都点准备后自动开局</p>
     <p v-else-if="canReady && myReady && !room?.started" class="cap center mt4 green-text">已准备 · 等对手点准备</p>
@@ -100,21 +103,27 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
   .player.active { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   .player.waiting { justify-content: center; color: var(--ink-3); }
   .xq-wrap { display: flex; justify-content: center; margin-top: var(--s5); }
-  .xq-board { position: relative; display: grid;
-    grid-template-columns: repeat(var(--cols), 1fr);
-    grid-template-rows: repeat(var(--rows), 1fr);
-    width: min(94vw, 420px); aspect-ratio: 9 / 10; padding: 8px;
-    border-radius: var(--r-lg); overflow: hidden;
-    background-image: linear-gradient(rgba(160, 120, 70, 0.16) 1px, transparent 1px),
-                      linear-gradient(90deg, rgba(160, 120, 70, 0.16) 1px, transparent 1px);
-    background-size: calc(100% / var(--cols)) calc(100% / var(--rows)); }
-  .xq-cell { position: relative; display: flex; align-items: center; justify-content: center;
+  /* 棋盘：9 路 × 10 行都是"交叉点"，棋子必须落在交叉点上（不是格子中间）。
+     水平方向留 0.75 格外边距 => 单位数 = 路数 + 0.5；垂直同理。 */
+  .xq-board { position: relative; width: min(92vw, 400px); aspect-ratio: 9 / 10;
+    border-radius: var(--r-lg); overflow: hidden; }
+  .xq-lines { position: absolute; pointer-events: none;
+    inset: calc(75% / (var(--rows) + 0.5)) calc(75% / (var(--cols) + 0.5));
+    background-image: linear-gradient(to bottom, rgba(122, 78, 38, 0.42) 1px, transparent 1px),
+                      linear-gradient(to right, rgba(122, 78, 38, 0.42) 1px, transparent 1px);
+    background-size: calc(100% / (var(--cols) - 1)) calc(100% / (var(--rows) - 1)); }
+  .xq-cell { position: absolute; width: calc(100% / (var(--cols) + 0.5)); aspect-ratio: 1;
+    left: calc((var(--col) + 0.75) / (var(--cols) + 0.5) * 100%);
+    top: calc((var(--row) + 0.75) / (var(--rows) + 0.5) * 100%);
+    transform: translate(-50%, -50%);
+    display: flex; align-items: center; justify-content: center;
     background: none; border: 0; padding: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .xq-cell.last { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 6px; }
-  .xq-cell.sel { background: color-mix(in srgb, var(--accent) 26%, transparent); border-radius: 6px; }
+  .xq-cell.last { background: color-mix(in srgb, var(--accent) 20%, transparent); border-radius: 50%; }
+  .xq-cell.sel { background: color-mix(in srgb, var(--accent) 28%, transparent); border-radius: 50%;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent); }
   .xq-piece { display: flex; align-items: center; justify-content: center;
-    width: 88%; aspect-ratio: 1; border-radius: 50%;
-    font-weight: 800; font-size: clamp(13px, 4.2vw, 20px); line-height: 1;
+    width: 86%; aspect-ratio: 1; border-radius: 50%;
+    font-weight: 800; font-size: clamp(12px, 3.6vw, 18px); line-height: 1;
     background: linear-gradient(180deg, #fffaf1, #efe2ca); color: #8a2b16;
     border: 1.5px solid rgba(120, 80, 40, 0.5);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.7); }
@@ -144,6 +153,11 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
     const rows = ref(10);
     const selected = ref(null);
 
+    /* 棋盘数组是 row * cols + col，一个下标 = 一个交叉点 */
+    const points = computed(() => board.value.map((v, i) => ({
+      v, i, col: i % cols.value, row: Math.floor(i / cols.value),
+    })));
+
     const players = roomApi.players;
     const finished = roomApi.finished;
     const isSpectator = roomApi.isSpectator;
@@ -170,6 +184,10 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
     function glyph(piece) {
       const table = piece > 0 ? RED : BLACK;
       return table[Math.abs(piece)] || "";
+    }
+    function labelOf(pt) {
+      const side = pt.v > 0 ? "红" : (pt.v < 0 ? "黑" : "");
+      return pt.v ? side + glyph(pt.v) : "空交叉点";
     }
     function sideOf(player) {
       const marks = roomApi.room.value?.state?.marks || {};
@@ -221,7 +239,7 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
 
     onUnmounted(() => { if (unwatch) unwatch(); });
 
-    return { ...roomApi, board, cols, rows, selected, players, finished, isSpectator,
-             statusText, resultTitle, resultReason, glyph, sideOf, isTurn, isLast, tap, resign, mediaUrl };
+    return { ...roomApi, board, cols, rows, selected, points, players, finished, isSpectator,
+             statusText, resultTitle, resultReason, glyph, labelOf, sideOf, isTurn, isLast, tap, resign, mediaUrl };
   },
 }));

@@ -1,5 +1,6 @@
 """Turn-based multiplayer games over WebSocket rooms (server authoritative)."""
 
+import os
 import random
 import time
 
@@ -13,6 +14,14 @@ ROOMS = {}
 # 断线宽限期（秒）：手机切后台 / 锁屏会断 WebSocket，
 # 这段时间内保留座位，同一个人重连上来直接坐回原位，对局不中止。
 GRACE_SECONDS = 120
+
+
+def grace_seconds():
+    """掉线宽限时间（秒）。测试可以把 game_grace_seconds 调小。"""
+    try:
+        return max(3, int(db.setting("game_grace_seconds", GRACE_SECONDS) or GRACE_SECONDS))
+    except Exception:  # noqa: BLE001
+        return GRACE_SECONDS
 
 
 def new_room_code():
@@ -69,6 +78,7 @@ def player_view(conn):
 
 class Room:
     def __init__(self, game, host, code=None):
+        self.left_names = {}
         self.id = code if code and code not in ROOMS else new_room_code()
         self.game = game
         self.host = host.uid
@@ -125,20 +135,48 @@ class Room:
         await broadcast({"t": "game.rooms", "rooms": list_rooms()})
         return True
 
+    async def settle_leave(self, conn, name):
+        """中途退出/掉线一律判负：1v1 直接把胜利判给对手；多人局把人摘出去，剩下不到 2 人才收场。"""
+        uid = conn.uid
+        self.left_names[uid] = name
+        rest = [c.uid for c in self.seats if c.uid != uid]
+        # 1v1 或者走完就没人了 -> 直接结算（走的人还在 seats 里，会自动记 -1）
+        if GAME_META[self.game]["max"] == 2 or len(rest) <= 1:
+            await self.finish(winners=rest, reason="%s 中途退出，判负" % name, extra_losers=[uid])
+            return "finished"
+        if self.game == "werewolf":
+            if await ww.drop(self, uid, name):
+                return "finished"
+            await self.broadcast({"t": "game.event", "text": "%s 中途退出，直接出局" % name})
+            return "dropped"
+        # 其它多人局：走的人先记一次负场，本局接着打
+        db.add_points(uid, online=-1, outcome=False)
+        db.execute("INSERT INTO game_records(game, mode, players, winners, detail, created_at) VALUES(?,?,?,?,?,?)",
+                   (self.game, "online",
+                    dumps([{"uid": uid, "name": name, "avatar": conn.user.get("avatar") or ""}]).decode(),
+                    dumps([]).decode(),
+                    dumps({"room": self.id, "reason": "%s 中途退出，判负" % name,
+                           "forfeit": True}).decode(), now()))
+        await self.broadcast({"t": "game.event",
+                              "text": "%s 中途退出，判负（-1 分）；本局继续" % name})
+        if self.game == "draw" and self.state.get("drawer") == uid:
+            await draw_next_round(self, "画手离开了，")
+        return "charged"
+
     async def remove(self, conn):
         was_seat = conn in self.seats
+        name = conn.user["name"] if conn.user else "有人"
+        running = was_seat and self.started and not self.finished
+        if running:
+            await self.settle_leave(conn, name)
         if conn in self.members:
             self.members.remove(conn)
-        if was_seat:
+        if was_seat and conn in self.seats:
             self.seats.remove(conn)
         conn.rooms.discard(self.id)
         self.rematch.discard(conn.uid)
         self.ready.discard(conn.uid)
-        name = conn.user["name"] if conn.user else "有人"
-        if was_seat and self.started and not self.finished:
-            # 对局进行中走人 -> 直接中止本局（不写战绩），房间回到等待状态，别人还能加进来
-            await self.abort("%s 离开了，本局已中止" % name)
-        elif self.members:
+        if not running and self.members:
             await self.broadcast({"t": "game.event", "text": "%s 离开了房间" % name})
         if not self.members:
             ROOMS.pop(self.id, None)
@@ -203,6 +241,12 @@ class Room:
         self.state["reason"] = reason
         await self.push("game.over", {"winners": [], "reason": reason, "aborted": True})
 
+    def name_of(self, uid):
+        for seat in self.seats:
+            if seat.uid == uid:
+                return seat.user["name"]
+        return self.left_names.get(uid, "有人")
+
     def seat_of(self, uid):
         for seat in self.seats:
             if seat.uid == uid:
@@ -240,6 +284,9 @@ class Room:
         state = self.state
         if self.game == "draw":
             state = {k: v for k, v in self.state.items() if k != "order"}
+            state["round_seconds"] = draw_seconds()
+            state["rounds_per_player"] = DRAW_ROUNDS_PER_PLAYER
+            state["draw_left"] = len(draw_remaining(self))     # 还没画满两轮的人数
             if not self.finished:
                 is_drawer = viewer is not None and viewer.uid == self.state.get("drawer")
                 if not is_drawer:
@@ -273,7 +320,7 @@ class Room:
             "state": state,
         }
 
-    async def finish(self, winners=None, reason=""):
+    async def finish(self, winners=None, reason="", extra_losers=None):
         if self.finished:
             return
         self.finished = True
@@ -283,29 +330,39 @@ class Room:
         self.state["status"] = "finished"
         self.state["reason"] = reason
         self.state["winners"] = winners or []
+        extra = [int(u) for u in (extra_losers or [])]
+        players = [player_view(c) for c in self.seats]
+        known = {p["uid"] for p in players}
+        for uid in extra:
+            if uid not in known:
+                players.append({"uid": uid, "name": self.left_names.get(uid, "已退出"),
+                                "role": None, "color": "", "avatar": ""})
         db.execute("INSERT INTO game_records(game, mode, players, winners, detail, created_at) VALUES(?,?,?,?,?,?)",
                    (self.game, "online",
-                    dumps([player_view(c) for c in self.seats]).decode(),
+                    dumps(players).decode(),
                     dumps(winners or []).decode(),
                     dumps({"room": self.id, "reason": reason}).decode(), now()))
         await self.push("game.over", {"winners": winners or [], "reason": reason, "aborted": False})
-        await self.award_points(winners or [])
+        await self.award_points(winners or [], extra)
 
     # ---------- 积分 ----------
-    async def award_points(self, winners):
+    async def award_points(self, winners, extra_losers=None):
         """联机对局结算：赢的人 +2，输的人 -1（可以是负分）。平局不加不减，观战者不参与。"""
-        if not self.seats:
-            return
         winners = {int(uid) for uid in (winners or [])}
-        for seat in list(self.seats):
-            if winners and seat.uid in winners:
+        losers = {int(uid) for uid in (extra_losers or [])}
+        seats = {c.uid: c for c in list(self.seats)}
+        if not seats and not losers:
+            return
+        targets = [(uid, c) for uid, c in seats.items()] + [(uid, None) for uid in losers if uid not in seats]
+        for uid, seat in targets:
+            if uid in winners:
                 delta, outcome = 2, True
-            elif winners:
+            elif winners or uid in losers:
                 delta, outcome = -1, False
             else:
                 delta, outcome = 0, None
-            points = db.add_points(seat.uid, online=delta, outcome=outcome)
-            if points is None:
+            points = db.add_points(uid, online=delta, outcome=outcome)
+            if points is None or seat is None:
                 continue
             await self.send_to(seat, {"t": "points", "delta": delta, "scope": "online", "points": points})
 
@@ -633,11 +690,58 @@ async def restart(room):
     elif room.game == "draw":
         await draw_start(room)
     elif room.game == "bomb":
-        await bomb_start(room)
+        await bomb_start(room, None)
     await broadcast({"t": "game.rooms", "rooms": list_rooms()})
 
 
 # ---------------------------------------------------------------- draw & guess
+DRAW_SECONDS = 75              # 每轮默认时长（秒）
+DRAW_ROUNDS_PER_PLAYER = 2     # 每个人画满两轮之后本局结束
+
+
+def draw_seconds():
+    """轮次时长；管理员可以用 draw_seconds 设置微调（测试也用它跑短局）。"""
+    try:
+        return max(10, int(db.setting("draw_seconds", DRAW_SECONDS) or DRAW_SECONDS))
+    except Exception:  # noqa: BLE001  (数据库异常也不能把对局卡死)
+        return DRAW_SECONDS
+
+
+def draw_sync_order(room):
+    """把半场加入的人补进轮转队列，把已经离开的人剔出去。"""
+    state = room.state
+    seats = [c.uid for c in room.seats]
+    order = [u for u in state.get("order", []) if u in seats]
+    for uid in seats:
+        if uid not in order:
+            order.append(uid)
+    state["order"] = order
+    return order
+
+
+def draw_done_count(room, uid):
+    return int(room.state.get("draws", {}).get(str(uid), 0))
+
+
+def draw_remaining(room):
+    """还没画满 DRAW_ROUNDS_PER_PLAYER 轮的人（在座才算）。"""
+    return [u for u in draw_sync_order(room) if draw_done_count(room, u) < DRAW_ROUNDS_PER_PLAYER]
+
+
+def draw_begin_round(room, index):
+    """开始新一轮：换画手、换词、清空画布和猜中名单。"""
+    state = room.state
+    order = state["order"]
+    state["turn_index"] = index
+    state["drawer"] = order[index]
+    state["word"] = random.choice(WORDS)
+    state["masked"] = "_" * len(state["word"])
+    state["guessed"] = []
+    state["strokes"] = []
+    state["reveal"] = ""
+    state["deadline"] = now() + draw_seconds()
+
+
 async def draw_start(room, conn=None):
     if len(room.seats) < 2:
         if conn:
@@ -651,36 +755,73 @@ async def draw_start(room, conn=None):
         "status": "playing",
         "order": [c.uid for c in order],
         "turn_index": 0,
-        "drawer": order[0].uid,
-        "word": random.choice(WORDS),
+        "drawer": 0,
+        "word": "",
         "masked": "",
         "scores": {str(c.uid): 0 for c in room.seats},
+        "draws": {},
         "guessed": [],
         "strokes": [],
         "round": 1,
-        "deadline": now() + 75,
+        "deadline": 0,
         "reveal": "",
     }
-    room.state["masked"] = "_" * len(room.state["word"])
+    draw_begin_round(room, 0)
     await room.push("game.state")
-    await room.broadcast({"t": "game.event", "text": "第 1 轮开始，轮到 %s 作画" % order[0].user["name"]})
+    await room.broadcast({"t": "game.event",
+                          "text": "第 1 轮开始，轮到 %s 作画（每人画满 %d 轮结束）"
+                                  % (order[0].user["name"], DRAW_ROUNDS_PER_PLAYER)})
+
+
+async def draw_finish(room, reason):
+    """本局收尾：分最高的人赢（并列一起赢）。"""
+    state = room.state
+    scores = state.get("scores", {})
+    seats = [c.uid for c in room.seats]
+    names = {str(c.uid): c.user["name"] for c in room.seats}
+    best = max([scores.get(str(u), 0) for u in seats] or [0])
+    winners = [u for u in seats if scores.get(str(u), 0) == best] if best > 0 else []
+    board = "、".join("%s %d 分" % (names.get(str(u), "?"), scores.get(str(u), 0)) for u in seats)
+    if winners:
+        who = "、".join(names.get(str(u), "?") for u in winners)
+        text = "%s · 最高分 %s（%d 分）" % (reason, who, best)
+    else:
+        text = "%s · 本局没人得分" % reason
+    await room.finish(winners=winners, reason=text)
+    await room.broadcast({"t": "game.event", "text": "🏁 本局结束：%s（%s）" % (text, board)})
 
 
 async def draw_next_round(room, reason="本轮结束"):
-    order = room.state["order"]
-    index = (room.state["turn_index"] + 1) % len(order)
-    room.state["round"] += 1
-    room.state["turn_index"] = index
-    room.state["drawer"] = order[index]
-    room.state["word"] = random.choice(WORDS)
-    room.state["masked"] = "_" * len(room.state["word"])
-    room.state["guessed"] = []
-    room.state["strokes"] = []
-    room.state["deadline"] = now() + 75
-    room.state["reveal"] = ""
+    """结算当前轮 -> 换下一位；所有人都画满两轮就结束整局。"""
+    state = room.state
+    drawer = state.get("drawer")
+    if drawer:
+        draws = state.setdefault("draws", {})
+        draws[str(drawer)] = draws.get(str(drawer), 0) + 1
+    if os.environ.get("CHECKIN_TICK_DEBUG") == "1":
+        log("draw next round=%s reason=%s drawer=%s draws=%s seats=%s"
+            % (state.get("round"), reason, drawer, state.get("draws"), [c.uid for c in room.seats]))
+    order = draw_sync_order(room)
+    if len(room.seats) < 2:
+        await draw_finish(room, "人不够了，本局提前结束")
+        return
+    remaining = draw_remaining(room)
+    if not remaining:
+        await draw_finish(room, "所有人都画满 %d 轮" % DRAW_ROUNDS_PER_PLAYER)
+        return
+    start = order.index(drawer) if drawer in order else -1
+    pick = order.index(remaining[0])
+    for offset in range(1, len(order) + 1):
+        cand = order[(start + offset) % len(order)]
+        if cand in remaining:
+            pick = order.index(cand)
+            break
+    state["round"] = int(state.get("round", 1)) + 1
+    draw_begin_round(room, pick)
     await room.push("game.state")
-    drawer_conn = room.seat_of(order[index])
-    await room.broadcast({"t": "game.event", "text": "%s 第 %d 轮开始" % (reason, room.state["round"])})
+    await room.broadcast({"t": "game.event",
+                          "text": "%s第 %d 轮开始，轮到 %s 作画"
+                                  % (reason, state["round"], room.name_of(state["drawer"]))})
 
 
 async def draw_guess(room, conn, text):
@@ -698,7 +839,7 @@ async def draw_guess(room, conn, text):
         room.state["scores"][str(room.state["drawer"])] = room.state["scores"].get(str(room.state["drawer"]), 0) + drawer_gain
         await room.broadcast({"t": "game.event", "text": "%s 猜中了！+%d 分（画手 +%d）" % (conn.user["name"], gain, drawer_gain)})
         others = [c.uid for c in room.seats if c.uid != room.state["drawer"]]
-        if all(uid in room.state["guessed"] for uid in others):
+        if others and all(uid in room.state["guessed"] for uid in others):
             room.state["reveal"] = word
             await room.push("game.update")
             await draw_next_round(room, "全员猜中，")
@@ -713,16 +854,21 @@ async def draw_timeout_check():
         if room.game != "draw" or not room.started or room.finished:
             continue
         if room.state.get("deadline", 0) and now() > room.state["deadline"]:
+            if os.environ.get("CHECKIN_TICK_DEBUG") == "1":
+                log("draw timeout room=%s round=%s overdue=%s" % (room.id, room.state.get("round"),
+                                                                  now() - room.state.get("deadline", 0)))
             room.state["reveal"] = room.state.get("word", "")
-            await room.broadcast({"t": "game.event", "text": "时间到！答案是「%s」" % room.state.get("reveal", "")})
+            await room.broadcast({"t": "game.event",
+                                  "text": "时间到！答案是「%s」，本轮结束" % room.state.get("reveal", "")})
             await room.push("game.update")
             await draw_next_round(room, "时间到，")
 
 
 # ---------------------------------------------------------------- number bomb
-async def bomb_start(room, conn):
+async def bomb_start(room, conn=None):
     if len(room.seats) < 2:
-        await room.send_to(conn, {"t": "game.event", "text": "至少 2 名玩家才能开始"})
+        if conn:
+            await room.send_to(conn, {"t": "game.event", "text": "至少 2 名玩家才能开始"})
         return
     lo, hi = 1, 100
     room.started = True
@@ -756,17 +902,15 @@ async def bomb_guess(room, conn, number):
                                   "avatar": conn.user.get("avatar") or "",
                                   "dir": "low" if number < room.state["bomb"] else "high"})
     if number == room.state["bomb"]:
-        room.state["loser"] = conn.uid
-        alive = [uid for uid in room.state["alive"] if uid != conn.uid]
+        # 踩中炸弹的人判负，本局立刻结束（不管还剩几个人）
+        loser = conn.uid
+        room.state["loser"] = loser
+        alive = [uid for uid in room.state["alive"] if uid != loser]
         room.state["alive"] = alive
-        await room.broadcast({"t": "game.event", "text": "💥 砰！%s 踩中炸弹 %d" % (conn.user["name"], number)})
-        if len(alive) <= 1:
-            await room.finish(winners=alive, reason="%s 被炸飞" % conn.user["name"])
-            return True
-        room.state["bomb"] = random.randint(lo + 1, hi - 1)
-        room.state["turn"] = alive[0]
         await room.push("game.update")
-        await room.broadcast({"t": "game.event", "text": "新一轮 1~100，%s 先猜" % room.state["names"][str(alive[0])]})
+        await room.broadcast({"t": "game.event",
+                              "text": "💥 砰！%s 猜中炸弹 %d，本局结束" % (conn.user["name"], number)})
+        await room.finish(winners=alive, reason="%s 猜中炸弹 %d" % (conn.user["name"], number))
         return True
     if number < room.state["bomb"]:
         room.state["lo"] = number
@@ -915,13 +1059,13 @@ async def on_disconnect(conn):
         if conn in room.members and not conn.detached_at:
             conn.detached_at = time.time()
             name = conn.user["name"] if conn.user else "有人"
-            await room.broadcast({"t": "game.event", "text": "%s 掉线了，%d 秒内回来还能接着玩" % (name, GRACE_SECONDS)})
+            await room.broadcast({"t": "game.event", "text": "%s 掉线了，%d 秒内回来还能接着玩" % (name, grace_seconds())})
             await room.push("game.state")
 
 
 async def sweep_disconnected():
     """宽限期到了还没回来，才真的把人移出房间。"""
-    deadline = time.time() - GRACE_SECONDS
+    deadline = time.time() - grace_seconds()
     for room in list(ROOMS.values()):
         for conn in list(room.members):
             if not conn.closed:

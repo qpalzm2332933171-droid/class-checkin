@@ -24,6 +24,12 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
       <button class="btn glass glass-thin code-btn" @click="copyCode">房间 {{ roomCode }}</button>
     </header>
 
+    <Transition name="mat">
+      <div v-if="banner" class="banner glass glass-thick" :class="banner.kind">
+        <b>{{ banner.text }}</b>
+      </div>
+    </Transition>
+
     <div class="phase glass glass-liquid mt4" :class="isNight ? 'night' : 'day'">
       <span class="phase-ico"><Icon :n="isNight ? 'moon' : 'sun'" :size="22" /></span>
       <div class="grow">
@@ -225,6 +231,14 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
   .log-line.bad { color: #ff453a; }
   .log-line.good { color: #34c759; }
   .red-text { color: #ff453a; } .green-text { color: #34c759; } .dim { color: var(--ink-3); }
+  /* 阶段播报：天黑请闭眼 / 狼人请睁眼 这类提示要看得见 */
+  .banner { position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--safe-t) + 64px);
+    z-index: 58; padding: 13px 20px; border-radius: var(--r-xl); max-width: min(92vw, 420px);
+    text-align: center; font-size: var(--fs-callout); line-height: 1.45; font-weight: 700; }
+  .banner.night { background: linear-gradient(135deg, rgba(58,58,96,0.78), rgba(24,24,38,0.78)); }
+  .banner.day { background: linear-gradient(135deg, rgba(255,196,84,0.42), rgba(255,145,64,0.34)); }
+  .banner.good { color: #34c759; }
+  .banner.bad { color: #ff453a; }
   .overlay { position: fixed; inset: 0; margin: auto; top: 0; height: fit-content;
     width: min(440px, calc(100vw - 32px)); padding: var(--s6); border-radius: var(--r-xl); z-index: 62; text-align: center; }
   `,
@@ -234,6 +248,16 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
     const draft = ref("");
     const chats = ref([]);
     const tick = ref(Date.now());
+    const banner = ref(null);
+    let bannerTimer = 0;
+    let logSeen = "";
+
+    function showBanner(entry) {
+      if (!entry || !entry.text) return;
+      banner.value = { text: entry.text, kind: entry.kind || "" };
+      if (bannerTimer) clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => { banner.value = null; }, 4600);
+    }
 
     const players = roomApi.players;
     const finished = roomApi.finished;
@@ -367,6 +391,20 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
 
     /* 换阶段就把选中清掉，免得手滑把上一轮的选中带过去 */
     const unwatch = watch(() => state.value.step, () => { picked.value = 0; });
+
+    /* 服务端每进入一个新阶段都会写一条 log：把它播报出来，不要一闪而过 */
+    const unwatchLog = watch(() => {
+      const log = state.value.log || [];
+      const last = log[log.length - 1];
+      return last ? String(last.at) + "|" + last.text : "";
+    }, (key) => {
+      if (!key || key === logSeen) return;
+      const first = !logSeen;
+      logSeen = key;
+      if (first) return;                        /* 刚进房间不打扰 */
+      const log = state.value.log || [];
+      showBanner(log[log.length - 1]);
+    }, { immediate: true });
     let stops = [];
     let timer = 0;
     onMounted(() => {
@@ -374,15 +412,22 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
         if (!msg.chat) return;
         chats.value = chats.value.concat([msg.chat]).slice(-60);
       }));
+      stops.push(onWs("game.event", (msg) => {
+        if (!msg.text) return;
+        if (msg.kind === "bad") { toast(msg.text, "warn", 2600); haptic(16); return; }
+        showBanner({ text: msg.text, kind: msg.kind || "" });
+      }));
       timer = setInterval(() => { tick.value = Date.now(); }, 1000);
     });
     onUnmounted(() => {
       stops.forEach((fn) => fn && fn());
       if (unwatch) unwatch();
+      if (unwatchLog) unwatchLog();
+      if (bannerTimer) clearTimeout(bannerTimer);
       if (timer) clearInterval(timer);
     });
 
-    return { ...roomApi, picked, draft, chats, players, finished, isSpectator, myId, state, myRole,
+    return { ...roomApi, picked, draft, chats, banner, players, finished, isSpectator, myId, state, myRole,
              isNight, phaseTitle, stepText, remaining, voteResult, myAction, actionTitle, actionHint,
              confirmText, allowEmpty, myAliveWin, myTeamOfWinner, waitingShort,
              nameOf, seatOf, avatarOf, iconOf, hasVoted, canPick, pick, confirm, witch, sendChat, mediaUrl, store,
