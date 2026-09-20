@@ -1038,11 +1038,22 @@ async def changelog_list(req):
                "version_h5": int(db.setting("version_h5") or 1)})
 
 
+def _text(value):
+    """把任意 JSON 值安全地转成去空白的字符串（None -> ''，其它类型走 str）。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
 @route("POST", "/api/admin/changelog", admin=True)
 async def changelog_create(req):
     data = req.json()
-    title = (data.get("title") or "").strip()[:80]
-    body = (data.get("body") or "").strip()[:4000]
+    title = _text(data.get("title"))[:80]
+    # body 允许是字符串或字符串数组（脚本/接口调用方两种写法都见过），统一成换行拼接
+    raw_body = data.get("body")
+    body = ("\n".join(_text(x) for x in raw_body) if isinstance(raw_body, list) else _text(raw_body))[:4000]
     version = (data.get("version") or "").strip()[:24] or ("v" + str(int(db.setting("version_h5") or 1)))
     if not title:
         raise HttpError(400, "标题不能为空")
