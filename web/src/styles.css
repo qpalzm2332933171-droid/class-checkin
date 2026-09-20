@@ -625,6 +625,7 @@ button.list-row.tap:active { background: var(--accent-soft); }
   font-size: var(--fs-sub); color: var(--ink); will-change: transform;
   animation: danmaku-fly 11s linear forwards; }
 .danmaku b { font-weight: 650; color: var(--accent); }
+.danmaku.me { box-shadow: var(--shadow-2), inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
 .danmaku span { overflow: hidden; text-overflow: ellipsis; }
 @keyframes danmaku-fly {
   from { transform: translateX(102%); opacity: 0; }
@@ -641,7 +642,8 @@ button.list-row.tap:active { background: var(--accent-soft); }
   display: inline-flex; align-items: center; gap: 7px; padding: 11px 16px; border-radius: var(--r-full);
   font-size: var(--fs-sub); font-weight: 600; color: var(--ink); }
 .mc-fab:active { transform: scale(0.95); }
-.mc-fab.live { box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent); }
+/* 类名加 mc- 前缀：视图 style 是全局注入的，.live 会撞到讨论区的在线绿点 */
+.mc-fab.mc-live { box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent); }
 .mc-dot { position: absolute; top: -4px; right: -4px; min-width: 19px; height: 19px; padding: 0 5px;
   display: grid; place-items: center; border-radius: var(--r-full); background: var(--red); color: #fff;
   font-size: 11px; font-style: normal; font-weight: 700; }

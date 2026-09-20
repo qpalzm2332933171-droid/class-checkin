@@ -152,6 +152,7 @@ try {
   const cards = await C.js("JSON.stringify([].slice.call(document.querySelectorAll('.game-card-wide')).map(function(c){return c.textContent.trim().slice(0,10);}))");
   check('弹幕大战：单机休闲里能看到这张卡片', cards.indexOf('弹幕大战') >= 0, cards);
 
+  await C.viewport(932, 430, 1);   /* 弹幕大战是横屏游戏，先切横屏再看 iframe 尺寸 */
   const clickCard = await C.js("(function(){var c=[].slice.call(document.querySelectorAll('.game-card-wide')).filter(function(x){return x.textContent.indexOf('弹幕大战')>=0;})[0];if(!c)return 'MISS';c.click();return 'OK';})()");
   await sleep(3200);
   const frameInfo = JSON.parse((await C.js("JSON.stringify({hash:location.hash," +
@@ -165,11 +166,12 @@ try {
     "phaser:!!f.contentWindow.Phaser,txt:(d.body.innerText||'').replace(/\\s+/g,' ').slice(0,50)});})()");
   const b = JSON.parse(box === 'MISS' ? 'null' : box);
   check('弹幕大战：iframe 铺满屏幕（没被压成 0）', !!b && b.w > 200 && b.h > 300, box);
-  check('弹幕大战：里面真的是游戏（Phaser + canvas 起来了）',
-        inner !== 'MISS' && inner !== 'NO-DOC' && (function () { const d = JSON.parse(inner); return d.canvas > 0; })(), inner);
+  check('弹幕大战：里面真的是游戏（Canvas2D 画布起来了）',
+        inner !== 'MISS' && inner !== 'NO-DOC' && (function () { const d = JSON.parse(inner); return d.canvas > 0 && /弹幕大战/.test(d.title || ''); })(), inner);
   await C.js("(function(){var e=document.querySelector('.danmaku-back');if(e)e.click();return 'ok';})()");
   await sleep(900);
   check('弹幕大战：能正常返回游戏大厅', (await C.js("location.hash")) === '#/games', await C.js("location.hash"));
+  await C.clearViewport();
 
 } catch (err) {
   out.push('FAIL  用例异常: ' + err.message);
