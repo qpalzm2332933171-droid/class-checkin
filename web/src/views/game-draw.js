@@ -42,21 +42,40 @@ registerRoute("/games/draw", defineView("gameDraw", {
     <div class="gd-board glass glass-thin mt3">
       <canvas ref="cv" class="gd-cv" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"></canvas>
       <div v-if="isDrawer && playing" class="gd-tools">
-        <button v-for="c in colors" :key="c" class="gd-sw" :class="{ on: color === c && !eraser }" :style="{ background: c }"
-                @click="pickColor(c)"></button>
-        <span class="gd-div"></span>
-        <button class="gd-tool" :class="{ on: eraser }" title="橡皮" aria-label="橡皮" @click="toggleEraser">
-          <Icon n="eraser" :size="17" />
-        </button>
-        <span class="gd-div"></span>
-        <button v-for="s in activeSizes" :key="s" class="gd-sz" :class="{ on: activeSize === s && !eraser }"
+        <template v-if="!paletteOpen">
+            <button class="gd-sw" :class="{ on: !eraser }" 
+                @click="paletteOpen = true" title="选择颜色" :style="{ background: color}">
+            </button>
+            <span class="gd-div"></span>
+            <button class="gd-tool" :class="{ on: eraser }" title="橡皮" aria-label="橡皮" 
+                @click="toggleEraser">
+                <Icon n="eraser" :size="17" />
+            </button>
+            <span class="gd-div"></span>
+            <button v-for="s in activeSizes" :key="s" class="gd-sz" :class="{ on: activeSize === s && !eraser }"
                 @click="pickSize(s)">
-          <i :style="{ width: szDot(s) + 'px', height: szDot(s) + 'px' }"></i>
-        </button>
-        <span class="grow"></span>
-        <button class="btn btn-icon glass glass-thin" title="撤销" @click="undo"><Icon n="back" :size="17" /></button>
-        <button class="btn btn-icon glass glass-thin" title="清空" @click="clearAll"><Icon n="trash" :size="17" /></button>
-      </div>
+                <i :style="{ width: szDot(s) + 'px', height: szDot(s) + 'px' }"></i>
+            </button>
+            <span class="grow"></span>
+            <button class="btn btn-icon glass glass-thin" title="撤销" @click="undo">
+                <Icon n="back" :size="17" />
+            </button>
+            <button class="btn btn-icon glass glass-thin" title="清空" @click="clearAll">
+                <Icon n="trash" :size="17" />
+            </button>
+        </template>
+        
+        <template v-else>
+            <button class="gd-sw" :class="{ on: !eraser }" 
+                @click="paletteOpen = false" title="选择颜色" :style="{ background: color}">
+            </button>
+            <button v-for="c in colors" :key="c" class="gd-sw"
+                :class="{ on: color === c && !eraser }"
+                :style="{ background: c }"
+                @click="pickColor(c); paletteOpen=false">
+            </button>
+        </template>
+    </div>
       <p v-else-if="!playing" class="cap gd-empty">{{ canStart ? "至少 2 人才可以开始" : "等待画手作画…" }}</p>
     </div>
 
@@ -144,7 +163,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-board { position: relative; border-radius: var(--r-lg); overflow: hidden; }
   .gd-cv { display: block; width: 100%; aspect-ratio: 4 / 3; touch-action: none; background: #fff; }
   .gd-tools { display: flex; align-items: center; gap: 10px; padding: 10px var(--s4) calc(10px + var(--safe-b)); }
-  .gd-sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .gd-sw { width: 26px; height: 26px;flex: none; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
   .gd-sw.on { border-color: var(--ink); transform: scale(1.12); }
   .gd-sz { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; }
   .gd-sz.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
@@ -191,12 +210,14 @@ registerRoute("/games/draw", defineView("gameDraw", {
     const eraser = ref(false);
     const esize = ref(ERASER_SIZES[1]);
     const left = ref(75);
+    const paletteOpen = ref(false)
     let ctx = null;
     let drawing = false;
     let last = null;
     let strokes = [];
     let stops = [];
     let ticker = null;
+
 
     const activeSizes = computed(() => (eraser.value ? ERASER_SIZES : SIZES));
     const activeSize = computed(() => (eraser.value ? esize.value : size.value));
@@ -382,6 +403,6 @@ registerRoute("/games/draw", defineView("gameDraw", {
              colors: COLORS, sizes: SIZES, eraser, activeSizes, activeSize, szDot, pickColor, toggleEraser, pickSize,
              isDrawer, playing, revealed, solvedByMe, canStart, ratio, roundSeconds,
              ranked, iWon, statusText, down, move, up, undo, clearAll, start, send, store, mediaUrl,
-             rankOpen, toggleRank, myRank, feedEl, me };
+             rankOpen, toggleRank, myRank, feedEl, me ,paletteOpen};
   },
 }));
