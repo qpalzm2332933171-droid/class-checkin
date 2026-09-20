@@ -23,6 +23,7 @@ import "./views/game-draw.js";
 import "./views/game-bomb.js";
 import "./views/game-2048.js";
 import "./views/game-mine.js";
+import "./views/game-danmaku.js";
 import "./views/notfound.js";
 
 const TABS = [

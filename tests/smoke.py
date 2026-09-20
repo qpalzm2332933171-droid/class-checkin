@@ -199,6 +199,17 @@ def main():
     check("chat history", status == 200 and any("冒烟测试消息" in m["content"] for m in res.get("messages", [])),
           "count=%d" % len(res.get("messages", [])))
 
+    # ---------- solo points (danmaku) ----------
+    status, res = http("POST", "/api/games/solo/points", {"kind": "danmaku", "score": 19999}, member_token)
+    check("danmaku 19999 -> awarded 0", status == 200 and res.get("awarded") == 0, res.get("error", ""))
+    status, res = http("POST", "/api/games/solo/points", {"kind": "danmaku", "score": "41000.9"}, member_token)
+    check("danmaku 41000 -> +2 solo", status == 200 and res.get("awarded") == 2
+          and (res.get("points") or {}).get("solo") == 2, res.get("error", ""))
+    status, res = http("POST", "/api/games/solo/points", {"kind": "danmaku", "score": 40000}, member_token)
+    check("danmaku cooldown -> 429", status == 429, res.get("error", ""))
+    status, res = http("POST", "/api/games/solo/points", {"kind": "nope"}, member_token)
+    check("unknown game kind -> 400", status == 400, res.get("error", ""))
+
     # ---------- websocket ----------
     try:
         ws_admin = WS(admin_token, "web")
