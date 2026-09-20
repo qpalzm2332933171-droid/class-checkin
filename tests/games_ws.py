@@ -165,10 +165,12 @@ a.send({"t": "game.leave"})
 b.send({"t": "game.leave"})
 
 # ---- 观战 + 中途离开 + 再来一局（五子棋 2 人位）----
-a.send({"t": "game.create", "game": "gomoku", "code": "2468"})
+# 固定房间号会被上一次跑挂掉的残留房间占用，所以这一节用随机四位号
+code = str(1000 + (int(time.time() * 37) % 8999))
+a.send({"t": "game.create", "game": "gomoku", "code": code})
 room = a.until({"game.entered"}, limit=20)["room"]["id"]
-check("可以指定四位房间号", str(room) == "2468")
-b.send({"t": "game.create", "game": "gomoku", "code": "2468"})
+check("可以指定四位房间号", str(room) == code)
+b.send({"t": "game.create", "game": "gomoku", "code": code})
 check("占用房间号会被拒绝", b.until({"game.error", "game.entered"}, limit=20).get("t") == "game.error")
 b.send({"t": "game.create", "game": "gomoku", "code": "abcd"})
 check("非数字房间号会被拒绝", b.until({"game.error", "game.entered"}, limit=20).get("t") == "game.error")
@@ -189,7 +191,8 @@ wait_playing(b)
 a.send({"t": "game.leave"})
 left_over = wait_for(b, {"game.over", "game.state"},
                      lambda m: m.get("t") == "game.over", limit=30)
-check("有人中途离开会中止本局", bool(left_over.get("aborted")))
+check("有人中途离开按判负结算（对手直接获胜）",
+      (not left_over.get("aborted")) and left_over.get("winners") == [uid_b])
 
 c.send({"t": "game.join", "room": room, "play": True})
 rejoin = c.until({"game.entered"}, limit=20)["room"]

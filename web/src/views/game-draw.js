@@ -1,11 +1,12 @@
 import {
-  defineView, registerRoute, ref, computed, watch, onMounted, onUnmounted, store, onWs, wsSend, toast, haptic,
+  defineView, registerRoute, ref, computed, watch, nextTick, onMounted, onUnmounted, store, onWs, wsSend, toast, haptic,
   mediaUrl,
 } from "../ui.js";
 import { useRoom } from "../room.js";
 
 const COLORS = ["#1c1c1e", "#ff3b30", "#ff9500", "#34c759", "#0a84ff", "#af52de"];
 const SIZES = [3, 7, 14];
+const ERASER_SIZES = [14, 26, 40];
 
 registerRoute("/games/draw", defineView("gameDraw", {
   template: `
@@ -34,15 +35,23 @@ registerRoute("/games/draw", defineView("gameDraw", {
     </div>
 
     <div v-if="revealed" class="gd-reveal glass glass-thin mt3">答案是「{{ revealed }}」</div>
+    <p v-if="playing" class="cap mt2 gd-progress">
+      每人画 {{ state.rounds_per_player || 2 }} 轮 · 还有 {{ state.draw_left || 0 }} 人没画满
+    </p>
 
     <div class="gd-board glass glass-thin mt3">
       <canvas ref="cv" class="gd-cv" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"></canvas>
       <div v-if="isDrawer && playing" class="gd-tools">
-        <button v-for="c in colors" :key="c" class="gd-sw" :class="{ on: color === c }" :style="{ background: c }"
-                @click="color = c; haptic(6)"></button>
+        <button v-for="c in colors" :key="c" class="gd-sw" :class="{ on: color === c && !eraser }" :style="{ background: c }"
+                @click="pickColor(c)"></button>
         <span class="gd-div"></span>
-        <button v-for="s in sizes" :key="s" class="gd-sz" :class="{ on: size === s }" @click="size = s; haptic(6)">
-          <i :style="{ width: s + 3 + 'px', height: s + 3 + 'px' }"></i>
+        <button class="gd-tool" :class="{ on: eraser }" title="橡皮" aria-label="橡皮" @click="toggleEraser">
+          <Icon n="eraser" :size="17" />
+        </button>
+        <span class="gd-div"></span>
+        <button v-for="s in activeSizes" :key="s" class="gd-sz" :class="{ on: activeSize === s && !eraser }"
+                @click="pickSize(s)">
+          <i :style="{ width: szDot(s) + 'px', height: szDot(s) + 'px' }"></i>
         </button>
         <span class="grow"></span>
         <button class="btn btn-icon glass glass-thin" title="撤销" @click="undo"><Icon n="back" :size="17" /></button>
@@ -58,36 +67,49 @@ registerRoute("/games/draw", defineView("gameDraw", {
       {{ myReady ? '取消准备' : '准备' }}
     </button>
 
-    <div class="mt4">
-      <h2 class="section-title">比分</h2>
-      <div class="glass glass-thin list">
-        <div v-for="p in ranked" :key="p.uid" class="list-row">
-          <span class="avatar avatar-sm" :style="p.color ? { background: p.color } : {}">
-            <img v-if="p.avatar" :src="mediaUrl(p.avatar)" :alt="p.name" loading="lazy" />
-            <template v-else>{{ p.name.slice(0, 1) }}</template>
-          </span>
-          <span class="grow elide">{{ p.name }}{{ p.uid === state.drawer ? " · 画手" : "" }}</span>
-          <span v-if="!playing && isReady(p)" class="chip chip-green">已准备</span>
-          <span v-if="state.guessed && state.guessed.includes(p.uid)" class="chip chip-green">已猜中</span>
-          <b class="num">{{ p.score }}</b>
+    <section class="gd-chat glass glass-thin mt4">
+      <header class="gd-chat-head">
+        <b class="grow">聊天 / 猜词</b>
+        <span class="cap">{{ isSpectator ? '观战中 · 发言会变弹幕' : '猜中会自动打码成 ***' }}</span>
+      </header>
+      <div class="gd-feed" ref="feedEl">
+        <div v-for="(m, i) in feed" :key="i" class="gd-frow" :class="{ me: m.uid === me, ok: m.correct }">
+          <b>{{ m.name }}</b><span class="elide">{{ m.text }}</span>
         </div>
+        <p v-if="!feed.length" class="cap gd-feed-empty">还没有人说话，猜中的词会打码成 ***</p>
       </div>
-    </div>
+      <form class="gd-composer" @submit.prevent="send">
+        <input class="field" v-model="draft" :disabled="isDrawer || !playing" maxlength="40"
+               :placeholder="isDrawer ? '你是画手，专心画啦' : (isSpectator ? '观战发言（会变成弹幕）' : '输入你猜的词')"
+               enterkeyhint="send" />
+        <button class="btn btn-primary btn-icon btn-lg" type="submit" :disabled="isDrawer || !playing || !draft.trim()">
+          <Icon n="send" :size="19" />
+        </button>
+      </form>
+    </section>
 
-    <div class="gd-feed glass glass-thin mt4">
-      <div v-for="(m, i) in feed" :key="i" class="gd-frow">
-        <b>{{ m.name }}</b><span class="elide">{{ m.text }}</span>
-      </div>
-      <p v-if="!feed.length" class="cap">猜中的词会出现在这里</p>
-    </div>
-
-    <form class="gd-composer" @submit.prevent="send">
-      <input class="field" v-model="draft" :disabled="isDrawer || !playing" maxlength="40"
-             :placeholder="isDrawer ? '你是画手，专心画啦' : '输入你猜的词'" enterkeyhint="send" />
-      <button class="btn btn-primary btn-icon btn-lg" type="submit" :disabled="isDrawer || !playing || !draft.trim()">
-        <Icon n="send" :size="19" />
+    <section class="gd-rank mt4">
+      <button class="gd-rank-head glass glass-thin" @click="toggleRank">
+        <Icon n="chart" :size="16" />
+        <b class="grow">本场积分排名</b>
+        <span class="cap">{{ ranked.length }} 人 · 我第 {{ myRank }} 名</span>
+        <span class="gd-caret" :class="{ open: rankOpen }"><Icon n="back" :size="15" /></span>
       </button>
-    </form>
+      <Transition name="mat">
+        <div v-if="rankOpen" class="glass glass-thin list mt2">
+          <div v-for="p in ranked" :key="p.uid" class="list-row">
+            <span class="avatar avatar-sm" :style="p.color ? { background: p.color } : {}">
+              <img v-if="p.avatar" :src="mediaUrl(p.avatar)" :alt="p.name" loading="lazy" />
+              <template v-else>{{ p.name.slice(0, 1) }}</template>
+            </span>
+            <span class="grow elide">{{ p.name }}{{ p.uid === state.drawer ? " · 画手" : "" }}</span>
+            <span v-if="!playing && isReady(p)" class="chip chip-green">已准备</span>
+            <span v-if="state.guessed && state.guessed.includes(p.uid)" class="chip chip-green">已猜中</span>
+            <b class="num">{{ p.score }}</b>
+          </div>
+        </div>
+      </Transition>
+    </section>
 
     <div v-if="notice" class="rematch-bar mt4" :class="{ want: othersWantRematch }">{{ notice }}</div>
 
@@ -117,6 +139,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-timer b { font-size: var(--fs-foot); }
   .gd-timer.urgent .gd-ring .bar { stroke: var(--orange); }
   .gd-timer.urgent b { color: var(--orange); }
+  .gd-progress { color: var(--ink-3); }
   .gd-reveal { padding: var(--s3) var(--s4); border-radius: var(--r-md); text-align: center; font-weight: 600; }
   .gd-board { position: relative; border-radius: var(--r-lg); overflow: hidden; }
   .gd-cv { display: block; width: 100%; aspect-ratio: 4 / 3; touch-action: none; background: #fff; }
@@ -126,13 +149,31 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-sz { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; }
   .gd-sz.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
   .gd-sz i { display: block; border-radius: 50%; background: var(--ink); }
+  .gd-tool { height: 30px; min-width: 30px; padding: 0 5px; display: grid; place-items: center;
+    border-radius: 15px; color: var(--ink-2); }
+  .gd-tool.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
   .gd-div { width: 1px; height: 20px; background: var(--hair); }
   .gd-empty { padding: var(--s5); text-align: center; }
-  .gd-feed { padding: var(--s2) var(--s4); max-height: 168px; overflow-y: auto; border-radius: var(--r-lg); }
-  .gd-frow { display: flex; gap: 8px; padding: 7px 0; font-size: var(--fs-foot); }
+  .gd-chat { display: flex; flex-direction: column; padding: var(--s3) var(--s4) var(--s4); border-radius: var(--r-lg); }
+  .gd-chat-head { display: flex; align-items: baseline; gap: var(--s2); padding-bottom: var(--s2); }
+  .gd-chat-head b { font-size: var(--fs-callout); font-weight: 650; }
+  .gd-feed { flex: 1; min-height: 168px; max-height: 40vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    display: flex; flex-direction: column; gap: 2px; padding: var(--s2) 0; }
+  .gd-feed-empty { padding: var(--s6) 0; text-align: center; }
+  .gd-frow { display: flex; gap: 8px; padding: 7px 0; font-size: var(--fs-sub); }
   .gd-frow + .gd-frow { border-top: 1px solid var(--hair); }
-  .gd-composer { display: flex; gap: 10px; margin-top: var(--s4); }
+  .gd-frow b { color: var(--ink-2); font-weight: 600; flex: none; }
+  .gd-frow.me b { color: var(--accent); }
+  .gd-frow.ok { color: var(--green); }
+  .gd-composer { display: flex; gap: 10px; margin-top: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--hair); }
   .gd-composer .field { flex: 1; }
+  .gd-rank-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px var(--s4);
+    border-radius: var(--r-lg); text-align: left; }
+  .gd-rank-head b { font-size: var(--fs-callout); font-weight: 650; }
+  .gd-caret { display: inline-grid; place-items: center; color: var(--ink-3);
+    transition: transform var(--dur-med) var(--ease-out); transform: rotate(-90deg); }
+  .gd-caret.open { transform: rotate(90deg); }
+  .gd-rank .list { padding: 4px var(--s3); }
   .gd-overlay { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + var(--s6));
     padding: var(--s5); border-radius: var(--r-xl); text-align: center; width: min(90vw, 400px); z-index: 30; }
   `,
@@ -147,6 +188,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     const draft = ref("");
     const color = ref(COLORS[0]);
     const size = ref(SIZES[1]);
+    const eraser = ref(false);
+    const esize = ref(ERASER_SIZES[1]);
     const left = ref(75);
     let ctx = null;
     let drawing = false;
@@ -155,6 +198,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     let stops = [];
     let ticker = null;
 
+    const activeSizes = computed(() => (eraser.value ? ERASER_SIZES : SIZES));
+    const activeSize = computed(() => (eraser.value ? esize.value : size.value));
     const me = computed(() => store.user?.id);
     const isDrawer = computed(() => state.value.drawer === me.value);
     const playing = computed(() => state.value.status === "playing");
@@ -163,13 +208,24 @@ registerRoute("/games/draw", defineView("gameDraw", {
     const solvedByMe = computed(() => guessed.value.includes(me.value));
     const canStart = computed(() => !playing.value && players.value.length >= 2);
     const isSpectator = roomApi.isSpectator;
-    const ratio = computed(() => Math.max(0, Math.min(1, left.value / 75)));
+    const roundSeconds = computed(() => Math.max(1, state.value.round_seconds || 75));
+    const ratio = computed(() => Math.max(0, Math.min(1, left.value / roundSeconds.value)));
     const ranked = computed(() => {
       const scores = state.value.scores || {};
       return players.value.map((p) => ({ ...p, score: scores[String(p.uid)] || 0 }))
         .sort((a, b) => b.score - a.score);
     });
     const iWon = computed(() => winners.value.some((w) => w.uid === me.value));
+    const rankOpen = ref(false);
+    const feedEl = ref(null);
+    const myRank = computed(() => {
+      const hit = ranked.value.findIndex((p) => p.uid === me.value);
+      return hit < 0 ? "-" : hit + 1;
+    });
+    function toggleRank() { rankOpen.value = !rankOpen.value; haptic(8); }
+    function scrollFeed() {
+      nextTick(() => { const el = feedEl.value; if (el) el.scrollTop = el.scrollHeight; });
+    }
     const statusText = computed(() => {
       if (finished.value) return "本局结束";
       if (!playing.value) return "等待开局";
@@ -199,12 +255,15 @@ registerRoute("/games/draw", defineView("gameDraw", {
       const el = cv.value;
       const w = el.clientWidth || 320;
       const h = el.clientHeight || 240;
+      const prev = ctx.globalCompositeOperation;
+      if (seg.e) ctx.globalCompositeOperation = "destination-out";
       ctx.strokeStyle = seg.c || "#1c1c1e";
       ctx.lineWidth = seg.w || 4;
       ctx.beginPath();
       ctx.moveTo(seg.x1 * w, seg.y1 * h);
       ctx.lineTo(seg.x2 * w, seg.y2 * h);
       ctx.stroke();
+      ctx.globalCompositeOperation = prev;
     }
 
     function clearAll(silent) {
@@ -241,7 +300,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
       if (!drawing) return;
       ev.preventDefault();
       const p = point(ev);
-      const seg = { x1: last.x, y1: last.y, x2: p.x, y2: p.y, c: color.value, w: size.value };
+      const seg = { x1: last.x, y1: last.y, x2: p.x, y2: p.y, c: color.value,
+                    w: eraser.value ? esize.value : size.value, e: eraser.value ? 1 : 0 };
       last = p;
       strokes.push(seg);
       paint(seg);
@@ -254,6 +314,11 @@ registerRoute("/games/draw", defineView("gameDraw", {
       drawing = false;
       try { cv.value.releasePointerCapture(ev.pointerId); } catch (e) {}
     }
+
+    function szDot(s) { return Math.round(Math.min(22, 3 + s * 0.9)); }
+    function pickColor(c) { color.value = c; eraser.value = false; haptic(6); }
+    function toggleEraser() { eraser.value = !eraser.value; haptic(8); }
+    function pickSize(s) { if (eraser.value) esize.value = s; else size.value = s; haptic(6); }
 
     function start() { wsSend({ t: "game.start" }); haptic(12); }
 
@@ -279,7 +344,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
 
     function tick() {
       const dl = state.value.deadline || 0;
-      left.value = dl ? Math.max(0, Math.round(dl - Date.now() / 1000)) : 75;
+      left.value = dl ? Math.max(0, Math.round(dl - Date.now() / 1000)) : roundSeconds.value;
     }
 
     const unwatch = watch(roomApi.room, (next) => { if (next) applyRoom(next); }, { immediate: true });
@@ -300,7 +365,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
       stops.push(onWs("game.chat", (msg) => {
         if (!msg.chat) return;
         feed.value.push(msg.chat);
-        if (feed.value.length > 40) feed.value.shift();
+        if (feed.value.length > 60) feed.value.shift();
+        scrollFeed();
       }));
       stops.push(onWs("game.event", (msg) => { if (msg.text) toast(msg.text, "info", 2600); }));
     });
@@ -313,7 +379,9 @@ registerRoute("/games/draw", defineView("gameDraw", {
     });
 
     return { ...roomApi, cv, state, players, feed, finished, winners, draft, color, size, left, isSpectator,
-             colors: COLORS, sizes: SIZES, isDrawer, playing, revealed, solvedByMe, canStart, ratio,
-             ranked, iWon, statusText, down, move, up, undo, clearAll, start, send, store, mediaUrl };
+             colors: COLORS, sizes: SIZES, eraser, activeSizes, activeSize, szDot, pickColor, toggleEraser, pickSize,
+             isDrawer, playing, revealed, solvedByMe, canStart, ratio, roundSeconds,
+             ranked, iWon, statusText, down, move, up, undo, clearAll, start, send, store, mediaUrl,
+             rankOpen, toggleRank, myRank, feedEl, me };
   },
 }));

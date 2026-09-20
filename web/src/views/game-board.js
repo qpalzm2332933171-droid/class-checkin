@@ -7,6 +7,7 @@ import { useRoom } from "../room.js";
 registerRoute("/games/board", defineView("gameBoard", {
   template: `
   <div class="page-plain">
+    <MatchChat />
     <header class="row gap3 head">
       <button class="btn btn-icon glass glass-thin" @click="leaveRoom(false)"><Icon n="back" :size="20" /></button>
       <div class="grow">
@@ -42,12 +43,14 @@ registerRoute("/games/board", defineView("gameBoard", {
       <div class="board glass glass-liquid" :style="{ '--n': size }">
         <button v-for="(cell, index) in board" :key="index" class="cell" :class="{ last: last?.index === index }"
                 @click="play(index)">
+          <span v-if="isGo && stars.has(index)" class="star-dot"></span>
           <span v-if="cell" class="stone" :class="cell === 1 ? 'black' : 'white'"></span>
         </button>
       </div>
     </div>
 
     <div v-if="isGo && room?.started && !finished" class="row gap3 mt4 go-bar">
+      <span class="chip">{{ size }} 路</span>
       <span class="chip">黑提 {{ captures['1'] || 0 }} 子</span>
       <span class="chip">白提 {{ captures['2'] || 0 }} 子</span>
       <span class="chip" :class="passes ? 'chip-orange' : ''">{{ passes ? '有一方停手' : '白贴 7.5 目' }}</span>
@@ -110,8 +113,10 @@ registerRoute("/games/board", defineView("gameBoard", {
   .board-wrap { display: flex; justify-content: center; margin-top: var(--s5); }
   .board { display: grid; grid-template-columns: repeat(var(--n), 1fr); gap: 1px; width: min(94vw, 460px);
     aspect-ratio: 1; padding: 8px; border-radius: var(--r-lg); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-  .cell { border: 0; background: var(--hair); border-radius: 3px; display: flex; align-items: center; justify-content: center;
+  .cell { position: relative; border: 0; background: var(--hair); border-radius: 3px; display: flex; align-items: center; justify-content: center;
     padding: 0; cursor: pointer; transition: background-color var(--dur-fast) linear; }
+  .star-dot { position: absolute; width: 24%; height: 24%; border-radius: 50%;
+    background: color-mix(in srgb, var(--ink) 62%, transparent); }
   .cell .stone { width: 86%; height: 86%; }
   .cell.last { box-shadow: inset 0 0 0 2px var(--accent); }
   .overlay { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + var(--s6));
@@ -136,6 +141,15 @@ registerRoute("/games/board", defineView("gameBoard", {
     const isGo = computed(() => roomApi.room.value?.game === "go");
     const captures = computed(() => roomApi.room.value?.state?.captures || {});
     const passes = computed(() => roomApi.room.value?.state?.passes || 0);
+    /* 围棋星位：19 路九星，9 路五星 */
+    const stars = computed(() => {
+      if (!isGo.value) return new Set();
+      const n = size.value;
+      const pts = n >= 19
+        ? [[3, 3], [3, 9], [3, 15], [9, 3], [9, 9], [9, 15], [15, 3], [15, 9], [15, 15]]
+        : [[2, 2], [2, 6], [6, 2], [6, 6], [4, 4]];
+      return new Set(pts.map(([r, c]) => r * n + c));
+    });
     const canStart = computed(() => !roomApi.room.value?.started && players.value.length === 2 && !finished.value);
     const statusText = computed(() => {
       if (!roomApi.room.value) return "连接中…";
@@ -162,7 +176,7 @@ registerRoute("/games/board", defineView("gameBoard", {
       const room = roomApi.room.value;
       const state = (room && room.state) || {};
       const expected = (room && room.game) === "tictactoe" ? 3 : ((room && room.game) === "go" ? 9 : 15);
-      size.value = state.size || expected;
+      size.value = state.size || (room && room.board_size) || expected;
       const total = size.value * size.value;
       if (state.board && state.board.length) board.value = state.board;
       else if (board.value.length !== total) board.value = new Array(total).fill(0);
@@ -198,6 +212,6 @@ registerRoute("/games/board", defineView("gameBoard", {
 
     return { ...roomApi, board, size, last, players, spectators, finished, myMark, isMyTurn, canStart, isSpectator: roomApi.isSpectator,
              statusText, resultTitle, resultReason, markOf, isTurn, play, start, mediaUrl,
-             isGo, captures, passes, passMove, resign };
+             isGo, captures, passes, passMove, resign, stars };
   },
 }));

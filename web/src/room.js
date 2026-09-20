@@ -76,10 +76,17 @@ export function useRoom(path) {
     if (left.value) return true;
     if (!silent) {
       const watching = isSpectator.value;
-      const yes = await confirmDialog(
-        watching ? "确定退出观战吗？" : "确定离开房间吗？对局不会被保存，你随时还能再加进来。",
-        watching ? { title: "退出观战", okText: "退出观战", danger: true }
-                 : { title: "离开房间", okText: "离开房间", danger: true });
+      const running = !watching && !!(room.value && room.value.started) && !finished.value && !aborted.value;
+      let text = watching ? "确定退出观战吗？" : "确定离开房间吗？对局不会被保存，你随时还能再加进来。";
+      let title = watching ? "退出观战" : "离开房间";
+      if (running) {
+        const solo = ((room.value && room.value.max) || 2) <= 2;
+        text = solo
+          ? "确定离开房间吗？现在离开算中途退出，直接判负（-1 分），对手获胜。之后还能加进来，但进度不保留。"
+          : "确定离开房间吗？现在离开算中途退出，判负并扣 1 分，本局会继续打完。之后还能加进来，但进度不保留。";
+        title = "离开房间（判负）";
+      }
+      const yes = await confirmDialog(text, { title, okText: watching ? "退出观战" : "离开房间", danger: true });
       if (!yes) return false;
     }
     left.value = true;

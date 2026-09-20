@@ -64,6 +64,7 @@ registerRoute("/games", defineView("games", {
             <div class="row gap2">
               <span class="room-code">{{ room.code }}</span>
               <b class="grow elide">{{ room.name }}</b>
+              <span v-if="room.opts && room.opts.size" class="chip">{{ room.opts.size }} 路</span>
               <span class="chip" :class="room.started ? 'chip-orange' : 'chip-accent'">
                 {{ room.finished ? '已结束' : (room.started ? '进行中' : '等人加入') }}
               </span>
@@ -135,6 +136,14 @@ registerRoute("/games", defineView("games", {
         <h3 class="t3">创建 {{ dialog.game.name }} 房间</h3>
         <p class="sub mt2">想要固定房间号就填一个四位数，不填我们随机生成。</p>
         <input class="field mt4 code-input" v-model="codeInput" inputmode="numeric" maxlength="4" placeholder="房间号（可留空）" />
+        <template v-if="dialog.game.key === 'go'">
+          <p class="cap mt5">棋盘大小</p>
+          <div class="row gap2 mt2">
+            <button v-for="s in [9, 19]" :key="s" class="btn grow" :class="dialog.size === s ? 'btn-primary' : ''"
+                    @click="dialog.size = s; haptic(6)">{{ s }} 路棋盘</button>
+          </div>
+          <p class="cap mt2">{{ dialog.size === 19 ? '19 路：标准大棋盘，一局慢一点' : '9 路：节奏快，几分钟一局' }}</p>
+        </template>
         <div class="row gap2 mt5">
           <button class="btn grow" @click="back">返回</button>
           <button class="btn btn-primary grow" @click="doCreate">创建</button>
@@ -357,7 +366,7 @@ registerRoute("/games", defineView("games", {
 
     function pick(game) {
       codeInput.value = "";
-      dialog.value = { game, step: "choose" };
+      dialog.value = { game, step: "choose", size: 9 };
       haptic(6);
     }
     function back() {
@@ -370,7 +379,9 @@ registerRoute("/games", defineView("games", {
       const code = (codeInput.value || "").replace(/\D/g, "");
       if (code && code.length !== 4) { toast("房间号需要是 4 位数字", "warn"); return; }
       const game = dialog.value.game;
-      wsSend({ t: "game.create", game: game.key, code: code });
+      const payload = { t: "game.create", game: game.key, code: code };
+      if (game.key === "go") payload.size = dialog.value.size === 19 ? 19 : 9;
+      wsSend(payload);
       closeDialog();
       toast("正在创建房间…", "info", 1200);
     }
@@ -420,7 +431,7 @@ registerRoute("/games", defineView("games", {
       stops.forEach((fn) => fn && fn());
     });
 
-    return { tab, rooms, records, dialog, codeInput, onlineGames: ONLINE, singleGames: SINGLE,
+    return { tab, rooms, records, dialog, codeInput, haptic, onlineGames: ONLINE, singleGames: SINGLE,
              board, boardSegEl, boardPill, myId, myPoints, openBoard, switchScope, store,
              trackEl, segEl, pill, xAnim, mediaUrl,
              refresh, setTab, pick, back, closeDialog, doCreate, doJoin, joinRoom, spectate,
