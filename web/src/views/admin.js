@@ -23,6 +23,14 @@ const SETTING_TOGGLES = [
   { key: "checkin_code_required", label: "签到口令", hint: "签到需要输入场次口令" },
 ];
 
+const STATUS_OPTS = [
+  { value: "present", label: "已签到" },
+  { value: "late", label: "迟到" },
+  { value: "leave", label: "请假" },
+  { value: "absent", label: "缺勤" },
+  { value: "clear", label: "清除这条记录" },
+];
+
 registerRoute("/admin", defineView("admin", {
   template: `
   <div class="page admin">
@@ -180,7 +188,7 @@ registerRoute("/admin", defineView("admin", {
         <input class="field" v-model="newSession.title" placeholder="场次名称，如 周三上午第一节课" />
 
         <label class="label mt4">签到时间</label>
-        <div class="row gap2 wrap">
+        <div class="ad-times">
           <button v-for="t in signTimes" :key="t" class="chip"
                   :class="{ 'chip-accent': newSession.sign_at === t && !customTime }" @click="pickTime(t)">{{ t }}</button>
           <button class="chip" :class="{ 'chip-accent': customTime }" @click="customTime = !customTime">自定义</button>
@@ -193,7 +201,7 @@ registerRoute("/admin", defineView("admin", {
           <label class="ad-mini"><span>口令</span><input class="field" v-model="newSession.code" placeholder="留空随机" /></label>
         </div>
 
-        <div class="row gap3 mt3 wrap">
+        <div class="row gap2 mt3 ad-toggles">
           <button class="btn" :class="newSession.require_location ? 'btn-primary' : ''" @click="toggleLocation">
             需要定位{{ newSession.require_location ? " ✓" : "" }}
           </button>
@@ -213,20 +221,48 @@ registerRoute("/admin", defineView("admin", {
               <button class="map-zbtn" @click="zoomMap(1)">+</button>
               <button class="map-zbtn" @click="zoomMap(-1)">−</button>
             </div>
-            <button class="map-me" @click="useMyLocation">
-              <Icon n="location" :size="15" /> 定位到我
+            <button class="map-me" :disabled="locating" @click="useMyLocation">
+              <Icon n="location" :size="15" /> {{ locating ? "定位中…" : "定位到我" }}
             </button>
-            <p class="map-tip">拖动地图选点</p>
+            <p class="map-tip">拖动地图微调位置</p>
           </div>
+          <div class="loc-pick mt3">
+            <span class="loc-pin"><Icon n="location" :size="17" /></span>
+            <div class="grow ad-ellip">
+              <p class="row-title">{{ newSession.place || "还没选地点" }}</p>
+              <p class="cap">{{ pickedCoord || "拖动地图微调，或从下面挑一个地点" }}</p>
+            </div>
+          </div>
+
           <div class="row gap2 mt3">
-            <input class="grow" v-model="newSession.place" placeholder="地点名称" />
-            <button class="btn btn-sm" :disabled="locating" @click="locateName">
-              {{ locating ? "识别中…" : "识别地名" }}
+            <input class="field grow" v-model.trim="placeQuery" placeholder="搜索地点：食堂 / 教学楼 / 咖啡"
+                   @keyup.enter="searchPlaces" />
+            <button class="btn btn-sm" :disabled="placeBusy || !placeQuery" @click="searchPlaces">
+              {{ placeBusy ? "查找中…" : "搜索" }}
             </button>
           </div>
-          <p class="cap mt2">{{ pickedCoord || "还没有选点" }} · 半径 {{ newSession.radius }} 米</p>
-          <input class="ad-range mt2" type="range" min="50" max="1500" step="10"
-                 v-model.number="newSession.radius" @input="syncRadius" />
+          <p class="cap mt2">{{ placeListTitle }}</p>
+          <div class="glass glass-thin list loc-list">
+            <button v-for="(item, i) in placeList" :key="i" class="list-row tap" @click="pickPlace(item)">
+              <div class="grow ad-ellip">
+                <p class="row-title">{{ item.name }}</p>
+                <p class="cap">{{ item.address }}</p>
+              </div>
+              <span v-if="item.distance >= 0" class="chip chip-accent">{{ fmtDistance(item.distance) }}</span>
+            </button>
+            <div v-if="!placeList.length" class="list-row sub">
+              {{ placeBusy ? "查找中…" : "点左下角「定位到我」看附近地点，也可以直接搜名字" }}
+            </div>
+          </div>
+
+          <label class="label mt4">签到半径（米）</label>
+          <div class="row gap2">
+            <input class="field grow" type="number" inputmode="numeric" min="20" max="5000" step="10"
+                   v-model.number="newSession.radius" @change="syncRadius" />
+            <button v-for="r in RADIUS_PRESETS" :key="r" class="chip" :class="{ 'chip-accent': newSession.radius === r }"
+                    @click="setRadius(r)">{{ r }}m</button>
+          </div>
+          <p class="cap mt2">地图上淡绿色那一圈就是签到时允许的范围。</p>
         </div>
 
         <button class="btn btn-primary btn-block mt4" :disabled="busy" @click="createSession">
@@ -271,51 +307,101 @@ registerRoute("/admin", defineView("admin", {
 
     <!-- ----------------------------------------------------------- records -->
     <template v-else-if="p.id === 'records'">
-      <div class="glass glass-thin ad-card mt4">
-        <label class="label">选择场次</label>
-        <select class="field" v-model.number="recordSession" @change="loadRecords">
-          <option :value="0">全部（最近 300 条）</option>
-          <option v-for="s in sessions" :key="s.id" :value="s.id">#{{ s.id }} {{ s.title }}</option>
-        </select>
-        <div class="row gap3 mt3">
-          <select class="field grow" v-model.number="newRecord.user_id">
-            <option :value="0">选择同学…</option>
-            <option v-for="u in users" :key="u.id" :value="u.id">{{ u.name }}</option>
-          </select>
-          <select class="field" v-model="newRecord.status">
-            <option value="present">已签到</option>
-            <option value="late">迟到</option>
-            <option value="leave">请假</option>
-            <option value="absent">缺勤</option>
-          </select>
-        </div>
-        <input class="field mt3" v-model="newRecord.note" placeholder="备注（可留空）" />
-        <button class="btn btn-primary btn-block mt4" :disabled="busy || !newRecord.user_id || !recordSession"
-                @click="saveRecord">
-          <Icon n="ad-check" :size="18" /> 补签 / 修改
-        </button>
-      </div>
-
-      <div class="glass glass-thin list mt4">
-        <div v-for="r in records" :key="r.id" class="list-row">
-          <span class="avatar avatar-sm">
-            <img v-if="r.avatar" :src="mediaUrl(r.avatar)" :alt="r.name" loading="lazy" />
-            <template v-else>{{ (r.name || '?').slice(0, 1) }}</template>
-          </span>
-          <div class="grow">
-            <p class="row-title">{{ r.name }} <span class="cap">@{{ r.username }}</span></p>
-            <p class="cap">{{ stamp(r.created_at) }} · 场次 #{{ r.session_id }}<template v-if="r.note"> · {{ r.note }}</template></p>
+      <!-- 场次详情：全班名单，点一下就能改状态 -->
+      <template v-if="rosterSession">
+        <div class="glass glass-thin ad-card mt4">
+          <div class="row gap2">
+            <button class="btn btn-icon" title="返回场次列表" @click="closeRoster"><Icon n="back" :size="18" /></button>
+            <div class="grow ad-ellip">
+              <p class="row-title">#{{ rosterSession.id }} {{ rosterSession.title }}</p>
+              <p class="cap">{{ stamp(rosterSession.sign_at || rosterSession.starts_at) }}<template v-if="rosterSession.place"> · {{ rosterSession.place }}</template></p>
+            </div>
+            <button class="btn btn-icon" title="导出这一场" @click="exportRecords(rosterSession.id)"><Icon n="download" :size="17" /></button>
+            <button class="btn btn-icon" title="删除场次" @click="removeSession(rosterSession)"><Icon n="trash" :size="17" /></button>
           </div>
-          <select class="field ad-tiny" :value="r.status" @change="patchRecord(r, $event.target.value)">
-            <option value="present">已签到</option>
-            <option value="late">迟到</option>
-            <option value="leave">请假</option>
-            <option value="absent">缺勤</option>
-          </select>
-          <button class="btn btn-icon" @click="removeRecord(r)"><Icon n="trash" :size="16" /></button>
+          <div class="ad-wrap mt3">
+            <span class="chip chip-green">已签到 {{ rosterCounts.present || 0 }}</span>
+            <span class="chip chip-orange">迟到 {{ rosterCounts.late || 0 }}</span>
+            <span class="chip">请假 {{ rosterCounts.leave || 0 }}</span>
+            <span class="chip chip-red">缺勤 {{ (rosterCounts.absent || 0) + (rosterCounts.none || 0) }}</span>
+          </div>
+          <p class="cap mt3">点下面的同学就能改他的状态：已签到 / 迟到 / 请假 / 缺勤。</p>
         </div>
-        <div v-if="!records.length" class="list-row sub">没有记录</div>
-      </div>
+
+        <div class="glass glass-thin list mt4">
+          <button v-for="m in roster" :key="m.user_id" class="list-row tap" @click="pickMember(m)">
+            <span class="avatar avatar-sm">
+              <img v-if="m.avatar" :src="mediaUrl(m.avatar)" :alt="m.name" loading="lazy" />
+              <template v-else>{{ (m.name || '?').slice(0, 1) }}</template>
+            </span>
+            <div class="grow ad-ellip">
+              <p class="row-title">{{ m.name }}</p>
+              <p class="cap">@{{ m.username }}<template v-if="m.note"> · {{ m.note }}</template><template v-if="m.by_admin"> · 管理员改过</template></p>
+            </div>
+            <span class="chip" :class="statusCls(m.status)">{{ statusText(m.status) }}</span>
+          </button>
+          <div v-if="!roster.length" class="list-row sub">名单加载中…</div>
+        </div>
+      </template>
+
+      <!-- 场次列表：按日期挑、也能搜 -->
+      <template v-else>
+        <div class="glass glass-thin ad-card mt4">
+          <div class="row gap3">
+            <div class="grow ad-ellip">
+              <p class="row-title">场次记录</p>
+              <p class="cap">先挑一个场次，再进去看/改全班的签到状态</p>
+            </div>
+            <button class="btn btn-sm" @click="exportRecords(0)"><Icon n="download" :size="16" /> 导出 Excel</button>
+          </div>
+          <div class="ad-dates mt3">
+            <select class="field" v-model.number="filter.y">
+              <option :value="0">全部年</option>
+              <option v-for="y in years" :key="y" :value="y">{{ y }} 年</option>
+            </select>
+            <select class="field" v-model.number="filter.m">
+              <option :value="0">全部月</option>
+              <option v-for="m in 12" :key="m" :value="m">{{ m }} 月</option>
+            </select>
+            <select class="field" v-model.number="filter.d">
+              <option :value="0">全部日</option>
+              <option v-for="d in days" :key="d" :value="d">{{ d }} 日</option>
+            </select>
+          </div>
+          <input class="field ad-fq mt2" v-model.trim="filter.q" placeholder="搜索场次标题或编号" />
+        </div>
+
+        <div class="glass glass-thin list mt4">
+          <button v-for="s in filteredSessions" :key="s.id" class="list-row tap" @click="openRoster(s)">
+            <div class="grow ad-ellip">
+              <p class="row-title">#{{ s.id }} {{ s.title }}</p>
+              <p class="cap">{{ stamp(s.sign_at || s.starts_at) }} · 已签 {{ s.present }}/{{ s.total }}<template v-if="s.place"> · {{ s.place }}</template></p>
+            </div>
+            <span class="chip" :class="s.status === 'open' ? 'chip-accent' : ''">{{ s.status === 'open' ? '进行中' : '已关闭' }}</span>
+            <Icon n="back" :size="16" class="ad-flip" />
+          </button>
+          <div v-if="!filteredSessions.length" class="list-row sub">没有符合条件的场次</div>
+        </div>
+      </template>
+
+      <Transition name="fade">
+        <div v-if="memberPick" class="scrim" @click="memberPick = null"></div>
+      </Transition>
+      <Transition name="sheet">
+        <div v-if="memberPick" class="sheet">
+          <div class="sheet-grab"></div>
+          <h3 class="t3">{{ memberPick.name }}</h3>
+          <p class="sub mt2">{{ rosterSession && rosterSession.title }} · 当前 {{ statusText(memberPick.status) }}</p>
+          <div class="stack mt4">
+            <button v-for="opt in STATUS_OPTS" :key="opt.value" class="btn btn-block"
+                    :class="{ 'btn-primary': memberPick.status === opt.value }" @click="setStatus(opt.value)">
+              {{ opt.label }}
+            </button>
+          </div>
+          <input class="field mt3" v-model.trim="pickNote" maxlength="200" placeholder="备注（可留空）" />
+          <button class="btn btn-block mt3" @click="memberPick = null">取消</button>
+        </div>
+      </Transition>
     </template>
 
     <!-- ------------------------------------------------------------- posts -->
@@ -342,7 +428,7 @@ registerRoute("/admin", defineView("admin", {
       <div class="glass glass-thin ad-card mt4">
         <label class="label">固定签到时间点</label>
         <p class="sub mt2">同学发布签到时可以直接挑这些时间点，也可以用自定义时间。</p>
-        <div class="row gap2 mt3 wrap">
+        <div class="ad-times mt3">
           <span v-for="(t, i) in signTimes" :key="t + i" class="chip chip-accent">
             {{ t }}
             <button class="ad-x" @click="removeTime(i)">×</button>
@@ -457,6 +543,29 @@ registerRoute("/admin", defineView("admin", {
   .ad-stage.dragging .ad-pane, .ad-stage.anim .ad-pane { will-change: transform; }
   .ad-stage.anim .ad-pane { transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
   @media (prefers-reduced-motion: reduce) { .ad-stage.anim .ad-pane { transition-duration: 1ms; } }
+  /* 记录页：可点的行、单行省略、日期筛选条 */
+  .ad-tap-hint { display: none; }
+  .ad-ellip { min-width: 0; }
+  .ad-ellip .row-title, .ad-ellip .cap { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 定位：已选地点卡片 / 附近地点列表 / 半径输入 */
+  .loc-pick { display: flex; align-items: center; gap: var(--s3); padding: 12px var(--s4);
+    border-radius: var(--r-md); background: var(--mat-thin); border: 1px solid var(--hair); }
+  .loc-pin { width: 32px; height: 32px; flex: none; border-radius: var(--r-full); display: flex;
+    align-items: center; justify-content: center; background: var(--green-soft); color: var(--green); }
+  .loc-list { max-height: 264px; overflow-y: auto; }
+  .loc-list .list-row { min-height: 46px; align-items: center; }
+  /* 时间点 chips：自动铺成整齐网格，宽度够就一整行，窄屏也是整齐的多行而不是参差换行 */
+  .ad-times { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: var(--s2); }
+  .ad-times .chip { justify-content: center; width: 100%; min-width: 0; }
+  /* 日期筛选：三列等宽永远一行；搜索框单独一行，避免小屏乱换行 */
+  .ad-dates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
+  .ad-dates .field { width: 100%; min-width: 0; padding: 10px 8px; font-size: clamp(12px, 3.4vw, 14px); }
+  .ad-fq { min-width: 0; padding: 10px 12px; }
+  /* 需要定位/需要备注/允许请假：三列等宽，窄屏也不换行 */
+  .ad-toggles { flex-wrap: nowrap; }
+  .ad-toggles .btn { flex: 1 1 0; min-width: 0; padding: 11px 6px; white-space: nowrap;
+    font-size: clamp(11.5px, 3.5vw, 14px); }
+  .ad-flip { transform: rotate(180deg); color: var(--ink-3); flex: none; }
   .ad-gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s3); }
   .ad-gauge { padding: var(--s4) var(--s2); border-radius: var(--r-md); text-align: center; }
   .ad-gauge b { display: block; font-size: 22px; }
@@ -475,7 +584,8 @@ registerRoute("/admin", defineView("admin", {
   .ad-edit { border-top: 1px solid var(--hair); background: color-mix(in srgb, var(--ink) 6%, transparent); }
   .ad-pad4 { padding: var(--s4) 0 var(--s4); }
   .ad-chev { transform: rotate(180deg); opacity: .25; }
-  .ad-mini { flex: 1; display: block; }
+  .ad-mini { flex: 1 1 0; min-width: 0; display: block; }
+  .ad-mini .field { min-width: 0; }
   .ad-mini span { display: block; font-size: 11px; color: var(--ink-2); margin-bottom: 4px; }
   .field.ad-tiny { width: auto; padding: 6px 26px 6px 10px; font-size: 12px; }
   .ad-struck { text-decoration: line-through; opacity: .5; }
@@ -499,7 +609,12 @@ registerRoute("/admin", defineView("admin", {
     const onlineUsers = ref([]);
     const users = ref([]);
     const sessions = ref([]);
-    const records = ref([]);
+    const roster = ref([]);
+    const rosterCounts = ref({});
+    const rosterSession = ref(null);
+    const memberPick = ref(null);
+    const pickNote = ref("");
+    const filter = ref({ y: 0, m: 0, d: 0, q: "" });
     const posts = ref([]);
     const logs = ref([]);
     const versions = ref([]);
@@ -508,8 +623,6 @@ registerRoute("/admin", defineView("admin", {
     const openSession = ref(0);
     const draft = ref({});
     const sDraft = ref({});
-    const recordSession = ref(0);
-    const newRecord = ref({ user_id: 0, status: "present", note: "" });
     const announceText = ref("");
     const uploadFile = ref(null);
     const fileInput = ref(null);
@@ -530,6 +643,11 @@ registerRoute("/admin", defineView("admin", {
     const graceDraft = ref(15);
     const mapEl = ref(null);
     const locating = ref(false);
+    const placeQuery = ref("");
+    const placeBusy = ref(false);
+    const placeList = ref([]);
+    const placeListTitle = ref("附近地点");
+    const RADIUS_PRESETS = [50, 100, 200, 500];
     const pickedCoord = computed(() => {
       const draft = newSession.value;
       if (!draft.lat && !draft.lng) return "";
@@ -607,11 +725,18 @@ registerRoute("/admin", defineView("admin", {
       }
     }
 
+    /* 模板 ref 写在 v-for 里时 Vue 会给数组，直接用会 appendChild is not a function */
+    function one(refValue) {
+      if (Array.isArray(refValue)) return refValue.find(function (el) { return !!el; }) || null;
+      return refValue || null;
+    }
+
     function mountMap() {
-      if (!mapEl.value) return;
+      const host = one(mapEl.value);
+      if (!host) return;
       if (map) { map.destroy(); map = null; }
       const draft = newSession.value;
-      map = createMapPicker(mapEl.value, {
+      map = createMapPicker(host, {
         lat: draft.lat || 31.2304,
         lng: draft.lng || 121.4737,
         zoom: 17,
@@ -628,6 +753,12 @@ registerRoute("/admin", defineView("admin", {
       newSession.value.lng = lng;
       haptic(6);
       locateName();
+      loadNearby();
+    }
+
+    function fmtDistance(meters) {
+      const m = Number(meters) || 0;
+      return m < 1000 ? Math.round(m) + " 米" : (m / 1000).toFixed(1) + " 公里";
     }
 
     /* 反查地名：服务端走 Photon / BigDataCloud，失败就让用户自己填 */
@@ -637,7 +768,7 @@ registerRoute("/admin", defineView("admin", {
       locating.value = true;
       try {
         const res = await api("/api/geo/reverse", { query: "lat=" + draft.lat + "&lng=" + draft.lng });
-        /* 完整地址太长，输入框里只留"地名 · 街道 · 区"三段 */
+        /* 完整地址太长，只留"地名 · 街道 · 区"三段 */
         if (res.name) draft.place = (res.address || res.name).split(" · ").slice(0, 3).join(" · ").slice(0, 60);
         else if (!draft.place) draft.place = draft.lat.toFixed(5) + ", " + draft.lng.toFixed(5);
       } catch (err) {
@@ -646,6 +777,64 @@ registerRoute("/admin", defineView("admin", {
       } finally {
         locating.value = false;
       }
+    }
+
+    /* 附近的几个地点：由近到远，直接挑，不用在地图上慢慢挪 */
+    async function loadNearby(silent) {
+      const draft = newSession.value;
+      if (!draft.lat && !draft.lng) return;
+      placeBusy.value = true;
+      try {
+        const res = await api("/api/geo/nearby", { query: "lat=" + draft.lat + "&lng=" + draft.lng + "&limit=12" });
+        placeList.value = res.items || [];
+        placeListTitle.value = placeList.value.length ? "附近地点（由近到远）" : "附近没找到地点，可以在上面搜名字";
+        if (res.offline && !silent) toast("附近地点暂时查不到，可以直接搜名字或拖地图", "warn", 3200);
+      } catch (err) {
+        placeList.value = [];
+        placeListTitle.value = "附近地点暂时查不到，可以在上面搜名字";
+      } finally {
+        placeBusy.value = false;
+      }
+    }
+
+    /* 搜索地点：不设范围，结果按离我多远从近到远排 */
+    async function searchPlaces() {
+      const query = (placeQuery.value || "").trim();
+      if (!query) return;
+      const draft = newSession.value;
+      placeBusy.value = true;
+      try {
+        /* 参照点：优先用已经选中的点；还没选就用地图当前中心，
+           这样结果总能算出"离我多远"，并按由近到远排。 */
+        const here = (draft.lat || draft.lng) ? draft : (map ? map.center() : null);
+        const near = here ? "&near=" + here.lat + "," + here.lng : "";
+        const res = await api("/api/geo/search", { query: "q=" + encodeURIComponent(query) + near });
+        placeList.value = res.items || [];
+        placeListTitle.value = placeList.value.length
+          ? "搜索结果「" + query + "」（由近到远）" : "没搜到「" + query + "」，换个说法试试";
+        if (res.offline) toast("搜索服务暂时连不上，稍后再试", "warn", 3200);
+      } catch (err) {
+        placeList.value = [];
+        placeListTitle.value = "搜索失败：" + err.message;
+      } finally {
+        placeBusy.value = false;
+      }
+    }
+
+    function pickPlace(item) {
+      const draft = newSession.value;
+      draft.lat = Number(Number(item.lat).toFixed(7));
+      draft.lng = Number(Number(item.lng).toFixed(7));
+      draft.place = (item.address || item.name || "").split(" · ").slice(0, 3).join(" · ").slice(0, 60) || item.name;
+      haptic(8);
+      if (map) map.setCenter(draft.lat, draft.lng);
+      loadNearby(true);
+    }
+
+    function setRadius(value) {
+      newSession.value.radius = value;
+      syncRadius();
+      haptic(6);
     }
 
     function zoomMap(delta) {
@@ -659,12 +848,15 @@ registerRoute("/admin", defineView("admin", {
     async function useMyLocation(silent) {
       /* 直接绑在 @click 上时第一个参数是事件对象，只有显式 true 才当静默 */
       if (silent !== true) toast("正在获取定位…", "info", 1400);
+      locating.value = true;
       let pos = null;
       try {
         pos = await deviceLocation({ timeout: 15000 });
       } catch (err) {
-        toast(err.message || "定位失败，可以直接拖动地图选点", "warn", 4000);
+        toast(err.message || "定位失败，可以直接搜地点名或拖动地图", "warn", 4000);
         return;
+      } finally {
+        locating.value = false;
       }
       if (map) {
         map.setMe(pos.lat, pos.lng);
@@ -704,9 +896,12 @@ registerRoute("/admin", defineView("admin", {
       const data = await api("/api/admin/sign-sessions");
       sessions.value = data.sessions || [];
     }
-    async function loadRecords() {
-      const data = await api("/api/admin/records", { query: recordSession.value ? "session_id=" + recordSession.value : "" });
-      records.value = data.records || [];
+    async function loadRoster() {
+      if (!rosterSession.value) return;
+      const data = await api("/api/admin/session-roster", { query: "session_id=" + rosterSession.value.id });
+      roster.value = data.roster || [];
+      rosterCounts.value = data.counts || {};
+      if (data.session) rosterSession.value = data.session;
     }
     async function loadPosts() {
       const data = await api("/api/admin/posts");
@@ -729,7 +924,7 @@ registerRoute("/admin", defineView("admin", {
         if (tab.value === "overview") await loadOverview();
         else if (tab.value === "users") { await loadUsers(); await loadOverview(); }
         else if (tab.value === "sessions") await loadSessions();
-        else if (tab.value === "records") { await loadSessions(); await loadUsers(); await loadRecords(); }
+        else if (tab.value === "records") { await loadSessions(); await loadRoster(); }
         else if (tab.value === "posts") await loadPosts();
         else if (tab.value === "settings" || tab.value === "signset") await loadOverview();
         else { await loadVersions(); await loadLogs(); }
@@ -981,35 +1176,90 @@ registerRoute("/admin", defineView("admin", {
     }
 
     function viewRecords(s) {
-      recordSession.value = s.id;
+      rosterSession.value = s;
       go("records");
     }
 
-    async function saveRecord() {
-      await guard(async () => {
-        await api("/api/admin/records", { method: "POST", body: { ...newRecord.value, session_id: recordSession.value } });
-        toast("已记录", "success");
-        newRecord.value = { user_id: 0, status: "present", note: "" };
-        await loadRecords();
-      });
+    async function openRoster(s) {
+      rosterSession.value = s;
+      roster.value = [];
+      await guard(async () => { await loadRoster(); });
     }
 
-    async function patchRecord(r, status) {
+    function closeRoster() {
+      rosterSession.value = null;
+      roster.value = [];
+      rosterCounts.value = {};
+    }
+
+    function pickMember(m) {
+      memberPick.value = m;
+      pickNote.value = m.note || "";
+    }
+
+    async function setStatus(status) {
+      const m = memberPick.value;
+      if (!m || !rosterSession.value) return;
       await guard(async () => {
-        await api("/api/admin/records/" + r.id, { method: "PATCH", body: { status } });
+        if (status === "clear") {
+          if (m.record_id) await api("/api/admin/records/" + m.record_id, { method: "DELETE" });
+        } else {
+          await api("/api/admin/records", { method: "POST", body: {
+            session_id: rosterSession.value.id, user_id: m.user_id, status, note: pickNote.value } });
+        }
+        memberPick.value = null;
+        haptic(12);
+        await loadRoster();
         toast("已更新", "success");
-        await loadRecords();
       });
     }
 
-    async function removeRecord(r) {
-      const yes = await confirmDialog("删除 " + r.name + " 的这条记录？", { okText: "删除", danger: true });
-      if (!yes) return;
-      await guard(async () => {
-        await api("/api/admin/records/" + r.id, { method: "DELETE" });
-        await loadRecords();
-      });
+    /* 导出 Excel：服务端现写 xlsx，前端只负责把 blob 存下来 */
+    async function exportRecords(sid) {
+      try {
+        toast("正在生成 Excel…", "info", 1600);
+        const resp = await api("/api/admin/records.xlsx" + (sid ? "?session_id=" + sid : ""), { raw: true });
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = sid ? ("签到记录-场次" + sid + ".xlsx") : "签到记录-全部场次.xlsx";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        toast("Excel 已导出", "success");
+      } catch (err) { toast(err.message, "error"); }
     }
+
+    const STATUS_TEXT = { present: "已签到", late: "迟到", leave: "请假", absent: "缺勤", none: "缺勤" };
+    function statusText(status) { return STATUS_TEXT[status] || status || "缺勤"; }
+    function statusCls(status) {
+      return { present: "chip-green", late: "chip-orange", leave: "", absent: "chip-red", none: "chip-red" }[status] || "";
+    }
+
+    const years = computed(() => {
+      const set = new Set();
+      sessions.value.forEach((s) => set.add(new Date((s.sign_at || s.starts_at) * 1000).getFullYear()));
+      return [...set].sort((a, b) => b - a);
+    });
+    const days = computed(() => {
+      const { y, m } = filter.value;
+      if (!y || !m) return 31;
+      return new Date(y, m, 0).getDate();
+    });
+    const filteredSessions = computed(() => {
+      const f = filter.value;
+      const q = (f.q || "").trim().toLowerCase();
+      return sessions.value.filter((s) => {
+        const d = new Date((s.sign_at || s.starts_at) * 1000);
+        if (f.y && d.getFullYear() !== f.y) return false;
+        if (f.m && d.getMonth() + 1 !== f.m) return false;
+        if (f.d && d.getDate() !== f.d) return false;
+        if (q && !(String(s.title || "").toLowerCase().includes(q) || ("#" + s.id).includes(q))) return false;
+        return true;
+      });
+    });
 
     async function togglePost(p) {
       await guard(async () => {
@@ -1074,7 +1324,8 @@ registerRoute("/admin", defineView("admin", {
         const res = await api("/api/admin/upload?" + query, { method: "POST", body: uploadFile.value });
         toast("已发布 v" + res.version_code, "success");
         uploadFile.value = null;
-        if (fileInput.value) fileInput.value.value = "";
+        const picked = Array.isArray(fileInput.value) ? fileInput.value.find(function (el) { return !!el; }) : fileInput.value;
+        if (picked) picked.value = "";
         await loadVersions();
       });
     }
@@ -1097,7 +1348,7 @@ registerRoute("/admin", defineView("admin", {
       stopAvatar = onWs("avatar", (msg) => {
         const row = users.value.find((x) => x.id === msg.user_id);
         if (row) row.avatar = msg.avatar || "";
-        const rec = records.value.find((x) => x.user_id === msg.user_id);
+        const rec = roster.value.find((x) => x.user_id === msg.user_id);
         if (rec) rec.avatar = msg.avatar || "";
       });
       stopSwipe = registerSwipe("/admin", onSwipe, (dir) => {
@@ -1117,14 +1368,17 @@ registerRoute("/admin", defineView("admin", {
       if (map) { map.destroy(); map = null; }
     });
 
-    return { tab, tabs, toggles, loading, busy, overview, server, online, onlineUsers, users, sessions, records,
+    return { tab, tabs, toggles, loading, busy, overview, server, online, onlineUsers, users, sessions,
+             roster, rosterCounts, rosterSession, memberPick, pickNote, filter, years, days, filteredSessions,
+             STATUS_OPTS, statusText, statusCls, openRoster, closeRoster, loadRoster, pickMember, setStatus, exportRecords,
              segEl, stageEl, pill, paneAnim, panes, paneStyle,
-             posts, logs, versions, settings, editing, openSession, draft, sDraft, recordSession, newRecord,
+             posts, logs, versions, settings, editing, openSession, draft, sDraft,
              announceText, uploadFile, fileInput, sql, sqlConfirm, sqlResult, newUser, newSession, upload,
              loadPercent, fileSize, barColor, sizeOf, stamp, percent, isAdmin, signTimes, newTime, graceDraft,
-             mapEl, locating, pickedCoord, customTime,
+             mapEl, locating, pickedCoord, customTime, placeQuery, placeBusy, placeList, placeListTitle,
+             RADIUS_PRESETS, searchPlaces, pickPlace, fmtDistance, setRadius,
              refresh, go, step, toggleEdit, createUser, saveUser, resetPassword, removeUser, createSession,
-             toggleSession, saveSession, removeSession, viewRecords, saveRecord, patchRecord, removeRecord,
+             toggleSession, saveSession, removeSession, viewRecords,
              togglePost, sendAnnounce, toggleSetting, saveSettings, downloadBackup, onFile, doUpload, runSql,
              pickTime, toggleLocation, useMyLocation, zoomMap, syncRadius, locateName, addTime, removeTime, saveSignSettings,
              store, navigate, mediaUrl };

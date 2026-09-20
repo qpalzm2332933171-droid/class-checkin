@@ -68,10 +68,28 @@ export function metersPerPixel(lat, z) {
   return 156543.03392 * Math.cos(Math.max(-85, Math.min(85, lat)) * PI / 180) / Math.pow(2, z);
 }
 
+/* 瓦片源：默认高德路网图；某些网络会把某个域名拦掉，加载失败就自动换下一个源，
+   三个都不行才提示用户（用户反馈过"地图不显示"，这里必须能自愈）。 */
+const PROVIDERS = [
+  function (x, y, z, sub) {
+    return "https://webrd0" + sub + ".is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x="
+      + x + "&y=" + y + "&z=" + z;
+  },
+  function (x, y, z, sub) {
+    return "https://wprd0" + sub + ".is.autonavi.com/appmaptile?lang=zh_cn&size=1&style=7&x="
+      + x + "&y=" + y + "&z=" + z;
+  },
+  function (x, y, z, sub) {
+    return "https://webst0" + sub + ".is.autonavi.com/appmaptile?style=6&x="
+      + x + "&y=" + y + "&z=" + z;
+  }
+];
+let provider = 0;
+
 function tileUrl(x, y, z) {
   const sub = (Math.abs(x + y) % 4) + 1;
-  return "https://webrd0" + sub + ".is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x="
-    + x + "&y=" + y + "&z=" + z;
+  const maker = PROVIDERS[Math.min(provider, PROVIDERS.length - 1)];
+  return maker(x, y, z, sub);
 }
 
 /* ------------------------------------------------------------------ 地图实例
@@ -109,6 +127,7 @@ export function createMapPicker(host, opts) {
   let cols = 0;
   let rows = 0;
   let failures = 0;
+  let switched = false;
 
   function size() {
     const box = host.getBoundingClientRect();
@@ -145,10 +164,20 @@ export function createMapPicker(host, opts) {
         img.style.left = (i * TILE) + "px";
         img.style.top = (j * TILE) + "px";
         img.addEventListener("error", () => {
+          /* 第一张图挂了就换源重来一次，不打扰用户 */
+          if (!switched && provider < PROVIDERS.length - 1) {
+            switched = true;
+            provider += 1;
+            tiles.forEach((old) => old.remove());
+            tiles.clear();
+            failures = 0;
+            redraw(true);
+            return;
+          }
           failures += 1;
           if (failures > 2) {
             alert.hidden = false;
-            alert.textContent = "地图瓦片加载不出来，检查一下网络";
+            alert.textContent = "地图加载不出来（网络可能拦了地图服务），可以直接搜地点名";
           }
         });
         tiles.set(key, img);
@@ -277,6 +306,7 @@ export function createMapPicker(host, opts) {
     if (value === zoom) return;
     zoom = value;
     failures = 0;
+    switched = false;
     alert.hidden = true;
     tiles.forEach((img) => img.remove());
     tiles.clear();
@@ -300,6 +330,7 @@ export function createMapPicker(host, opts) {
       tiles.forEach((img) => img.remove());
       tiles.clear();
       failures = 0;
+      switched = false;
       alert.hidden = true;
       redraw(true);
     },

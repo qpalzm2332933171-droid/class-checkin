@@ -68,6 +68,18 @@ def ts_at_hhmm(hhmm, base_ts=None, grace_seconds=0, min_lead=0):
     return target
 
 
+DEFAULT_EARLY_MINUTES = 30
+
+
+def session_opens_at(row):
+    """签到开放时刻 = 签到时间 - 提前开放时长（0 表示没有签到时间，不限制）。"""
+    sign_at = row.get("sign_at") if hasattr(row, "get") else None
+    if not sign_at:
+        return 0
+    early = int(db.setting("early_minutes", str(DEFAULT_EARLY_MINUTES)) or DEFAULT_EARLY_MINUTES)
+    return int(sign_at) - early * 60
+
+
 def haversine(lat1, lng1, lat2, lng2):
     """两点间距离(米)。"""
     import math
@@ -105,6 +117,7 @@ async def get_config(req):
         "register_open": settings.get("register_open") == "1",
         "sign_times": sign_time_options(),
         "default_grace": int(settings.get("default_grace") or 15),
+        "early_minutes": int(settings.get("early_minutes") or DEFAULT_EARLY_MINUTES),
         "topics_enabled": settings.get("topics_enabled", "1") == "1",
         "announce_popup": settings.get("announce_popup", "1") == "1",
     })
@@ -334,10 +347,13 @@ def session_view(row, user_id=None):
             mine = {"status": rec["status"], "created_at": rec["created_at"], "note": rec["note"]}
     sign_at = row.get("sign_at") or row["late_after"] or row["starts_at"]
     ends_at = row["ends_at"]
+    early = int(db.setting("early_minutes", str(DEFAULT_EARLY_MINUTES)) or DEFAULT_EARLY_MINUTES)
+    opens_at = (sign_at - early * 60) if row.get("sign_at") else 0
     return {
         "id": row["id"], "title": row["title"], "status": row["status"],
         "starts_at": row["starts_at"], "ends_at": ends_at, "late_after": row["late_after"],
-        "sign_at": sign_at, "grace_minutes": row.get("grace_minutes") or 0,
+        "sign_at": sign_at, "opens_at": opens_at,
+        "grace_minutes": row.get("grace_minutes") or 0,
         "require_note": row["require_note"], "note": row["note"],
         "require_location": row.get("require_location") or 0,
         "lat": row.get("lat") or 0.0, "lng": row.get("lng") or 0.0,
@@ -385,6 +401,9 @@ async def sign_in(req):
     ts = now()
     if row["ends_at"] and ts > row["ends_at"]:
         raise HttpError(400, "签到已截止")
+    opens_at = session_opens_at(row)
+    if opens_at and ts < opens_at:
+        raise HttpError(400, "签到还没开始，%s 才会开放" % fmt(opens_at, "%H:%M"))
     note = (data.get("note") or "").strip()[:200]
     if row["require_note"] and not note:
         raise HttpError(400, "本次签到需要填写备注/请假说明")
@@ -439,6 +458,11 @@ async def sign_leave(req):
         raise HttpError(400, "该场次不允许请假")
     note = (data.get("note") or "").strip()[:200] or "请假"
     ts = now()
+    if row["ends_at"] and ts > row["ends_at"]:
+        raise HttpError(400, "该场次已截止")
+    opens_at = session_opens_at(row)
+    if opens_at and ts < opens_at:
+        raise HttpError(400, "签到还没开始，%s 才会开放" % fmt(opens_at, "%H:%M"))
     existing = db.query_one("SELECT * FROM records WHERE session_id = ? AND user_id = ?", (sid, req.user["id"]))
     if existing:
         db.execute("UPDATE records SET status = 'leave', note = ?, updated_at = ? WHERE id = ?", (note, ts, existing["id"]))
@@ -593,6 +617,49 @@ def _reverse_lookup(lat, lng):
     return {}
 
 
+def _photon_nearby(lat, lng, limit=12):
+    """把点周围的 POI 拉出来，按距离从近到远排好（Photon reverse 支持 limit>1）。"""
+    import urllib.parse as _parse
+    params = {"lat": "%.6f" % lat, "lon": "%.6f" % lng, "limit": str(int(limit))}
+    items = _photon_items(_geo_get("https://photon.komoot.io/reverse?" + _parse.urlencode(params)), limit)
+    seen, out = set(), []
+    for item in items:
+        if not item["lat"] and not item["lng"]:
+            continue
+        distance = int(haversine(lat, lng, item["lat"], item["lng"]))
+        key = (item["name"], round(distance / 40.0))
+        if key in seen:
+            continue
+        seen.add(key)
+        item["distance"] = distance
+        out.append(item)
+    out.sort(key=lambda row: row["distance"])
+    return out
+
+
+@route("GET", "/api/geo/nearby", auth_required=False)
+async def geo_nearby(req):
+    """附近的几个地点：按距离从近到远返回，供"定位到我"之后直接挑。"""
+    import asyncio
+    try:
+        lat, lng = float(req.q("lat", "0")), float(req.q("lng", "0"))
+    except ValueError:
+        raise HttpError(400, "坐标格式不正确")
+    if not lat and not lng:
+        raise HttpError(400, "缺少坐标")
+    limit = max(3, min(req.int_param("limit", 12), 20))
+    key = ("n", round(lat, 4), round(lng, 4), limit)
+    items = _geo_cache_get(key)
+    if items is None:
+        try:
+            items = await asyncio.to_thread(_photon_nearby, lat, lng, limit)
+        except Exception:  # noqa: BLE001
+            _geo_cache_put(key, [], 120)
+            return ok({"items": [], "offline": True})
+        _geo_cache_put(key, items, 600)
+    return ok({"items": items, "offline": False})
+
+
 @route("GET", "/api/geo/search", auth_required=False)
 async def geo_search(req):
     import asyncio
@@ -606,7 +673,7 @@ async def geo_search(req):
             lat, lng = float(near.split(",")[0]), float(near.split(",")[1])
         except ValueError:
             lat = lng = 0.0
-    key = ("q", query, round(lat, 2), round(lng, 2))
+    key = ("q", query, round(lat, 3), round(lng, 3))
     items = _geo_cache_get(key)
     if items is None:
         try:
@@ -614,6 +681,10 @@ async def geo_search(req):
         except Exception:  # noqa: BLE001
             _geo_cache_put(key, [], 120)
             return ok({"items": [], "offline": True})
+        if lat or lng:
+            for item in items:
+                item["distance"] = int(haversine(lat, lng, item["lat"], item["lng"]))
+            items.sort(key=lambda row: row.get("distance", 0))
         _geo_cache_put(key, items)
     return ok({"items": items, "offline": False})
 
@@ -978,13 +1049,7 @@ async def changelog_create(req):
     ts = now()
     cid = db.execute("INSERT INTO changelogs(version, title, body, created_by, created_at) VALUES(?,?,?,?,?)",
                      (version, title, body, req.user["id"], ts))
-    if data.get("announce", True):
-        text = ("【更新 %s】%s\n%s" % (version, title, body)).strip()
-        post_id = db.execute(
-            "INSERT INTO posts(author_id, anon, anon_name, content, kind, created_at) VALUES(?,?,?,?,?,?)",
-            (req.user["id"], 0, req.user["name"], text[:500], "announce", ts))
-        asyncio.ensure_future(ws.broadcast({"t": "announce", "content": text[:500],
-                                            "id": post_id, "created_at": ts}))
+    # 更新日志只进「更新日志」入口，不再往公告里发（用户 2026-09-20 要求）
     db.audit(req.user["id"], "admin.changelog", "%s %s" % (version, title), req.client_ip)
     return ok({"id": cid, "version": version})
 
@@ -1231,7 +1296,7 @@ async def admin_sign_update(req, sid):
     return ok({"updated": True})
 
 
-@route("DELETE", "/api/admin/sign-sessions/{sid}", admin=True)
+@route("DELETE", "/api/admin/sign-sessions/{sid}", staff=True)
 async def admin_sign_delete(req, sid):
     db.execute("DELETE FROM sign_sessions WHERE id = ?", (int(sid),))
     db.execute("DELETE FROM records WHERE session_id = ?", (int(sid),))
@@ -1257,6 +1322,116 @@ async def admin_records(req):
         "avatar": r["avatar"] or "",
         "ip": mask_ip(r["ip"]), "device": r["device"], "by_admin": r["by_admin"],
     } for r in rows]})
+
+
+STATUS_TEXT = {"present": "已签到", "late": "迟到", "leave": "请假", "absent": "缺勤", "none": "未记录"}
+
+
+def session_roster(session_id):
+    """一个场次的全班名单：每个人当前是什么状态（没有记录就是"未记录"）。"""
+    users = db.query("SELECT id, name, username, avatar FROM users WHERE banned = 0 ORDER BY id")
+    recs = {r["user_id"]: r for r in db.query("SELECT * FROM records WHERE session_id = ?", (session_id,))}
+    rows, counts = [], {"present": 0, "late": 0, "leave": 0, "absent": 0, "none": 0}
+    for u in users:
+        rec = recs.get(u["id"])
+        status = rec["status"] if rec else "none"
+        counts[status] = counts.get(status, 0) + 1
+        rows.append({
+            "user_id": u["id"], "name": u["name"], "username": u["username"],
+            "avatar": u["avatar"] or "", "status": status,
+            "record_id": rec["id"] if rec else 0,
+            "note": (rec["note"] if rec else "") or "",
+            "created_at": rec["created_at"] if rec else 0,
+            "by_admin": rec["by_admin"] if rec else 0,
+        })
+    return rows, counts
+
+
+@route("GET", "/api/admin/session-roster", staff=True)
+async def admin_session_roster(req):
+    sid = req.int_param("session_id", 0)
+    row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (sid,))
+    if not row:
+        raise HttpError(404, "场次不存在")
+    rows, counts = session_roster(sid)
+    return ok({"session": session_view(row), "roster": rows, "counts": counts})
+
+
+def _stamp(ts):
+    return fmt(ts, "%Y-%m-%d %H:%M") if ts else ""
+
+
+def _rate(present, late, total):
+    if not total:
+        return "0%"
+    return "%.1f%%" % ((present + late) * 100.0 / total)
+
+
+@route("GET", "/api/admin/records.xlsx", staff=True)
+async def admin_records_xlsx(req):
+    """把全部场次的签到记录导出成 Excel（.xlsx 用标准库 zipfile 现写，不依赖第三方包）。"""
+    import xlsx
+    sid = req.int_param("session_id", 0)
+    if sid:
+        sessions = db.query("SELECT * FROM sign_sessions WHERE id = ?", (sid,))
+    else:
+        sessions = db.query("SELECT * FROM sign_sessions ORDER BY sign_at DESC, id DESC LIMIT 500")
+    users = db.query("SELECT id, name, username FROM users WHERE banned = 0 ORDER BY id")
+    user_acc = {u["id"]: u["username"] for u in users}
+    total_users = len(users)
+
+    detail = [["场次", "签到时间", "姓名", "账号", "状态", "记录时间", "备注", "距离(米)", "管理员代签"]]
+    summary = [["场次", "签到时间", "应到", "已签到", "迟到", "请假", "缺勤", "未记录", "出勤率"]]
+    per_user = {}
+    for u in users:
+        per_user[u["id"]] = {"present": 0, "late": 0, "leave": 0, "absent": 0, "none": 0}
+
+    for sess in sessions:
+        rows = list(db.query(
+            "SELECT r.*, u.name AS uname FROM records r JOIN users u ON u.id = r.user_id WHERE r.session_id = ?",
+            (sess["id"],)))
+        got = {}
+        for r in rows:
+            got[r["user_id"]] = r
+            detail.append([
+                "#%d %s" % (sess["id"], sess["title"]), _stamp(sess.get("sign_at") or sess["starts_at"]),
+                r["uname"], user_acc.get(r["user_id"], ""), STATUS_TEXT.get(r["status"], r["status"]),
+                _stamp(r["created_at"]), r["note"] or "", int(r["distance"] or 0),
+                "是" if r["by_admin"] else "",
+            ])
+            if r["user_id"] in per_user:
+                per_user[r["user_id"]][r["status"]] = per_user[r["user_id"]].get(r["status"], 0) + 1
+        for u in users:
+            if u["id"] not in got:
+                per_user[u["id"]]["none"] += 1
+        counts = {"present": 0, "late": 0, "leave": 0, "absent": 0}
+        for r in rows:
+            if r["status"] in counts:
+                counts[r["status"]] += 1
+        missing = max(0, total_users - len(rows))
+        summary.append([
+            "#%d %s" % (sess["id"], sess["title"]), _stamp(sess.get("sign_at") or sess["starts_at"]),
+            total_users, counts["present"], counts["late"], counts["leave"], counts["absent"], missing,
+            _rate(counts["present"], counts["late"], total_users),
+        ])
+
+    stat = [["姓名", "账号", "已签到", "迟到", "请假", "缺勤", "未记录", "出勤率"]]
+    for u in users:
+        c = per_user[u["id"]]
+        stat.append([u["name"], u["username"], c["present"], c["late"], c["leave"], c["absent"], c["none"],
+                     _rate(c["present"], c["late"], len(sessions) or 1)])
+
+    blob = xlsx.build([
+        ("签到明细", detail, [26, 18, 12, 14, 9, 18, 20, 10, 11]),
+        ("场次汇总", summary, [26, 18, 7, 8, 7, 7, 7, 8, 9]),
+        ("个人统计", stat, [12, 14, 9, 7, 7, 7, 8, 9]),
+    ])
+    fname = ("sign-records-%s.xlsx" % fmt(now(), "%Y%m%d-%H%M")) if not sid else ("sign-session-%d.xlsx" % sid)
+    db.audit(req.user["id"], "admin.records.export", "session=%s rows=%d" % (sid or "all", len(detail) - 1), req.client_ip)
+    return Response(200, blob, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", {
+        "Content-Disposition": 'attachment; filename="%s"' % fname,
+        "Cache-Control": "no-cache",
+    })
 
 
 @route("POST", "/api/admin/records", staff=True)
@@ -1405,6 +1580,14 @@ async def admin_sign_settings(req):
         grace = max(0, min(grace, 24 * 60))
         db.set_setting("default_grace", str(grace))
         changed["default_grace"] = grace
+    if "early_minutes" in data:
+        try:
+            early = int(data["early_minutes"] if data["early_minutes"] not in (None, "") else 0)
+        except (TypeError, ValueError):
+            raise HttpError(400, "提前开放时长应为分钟数")
+        early = max(0, min(early, 24 * 60))
+        db.set_setting("early_minutes", str(early))
+        changed["early_minutes"] = early
     if "topics_enabled" in data and req.user.get("role") == "admin":
         db.set_setting("topics_enabled", "1" if data["topics_enabled"] else "0")
         changed["topics_enabled"] = db.setting("topics_enabled")

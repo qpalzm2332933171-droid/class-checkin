@@ -67,6 +67,15 @@ async function connect(port) {
       await api.mouse('mousePressed', p.x, p.y); await api.sleep(60); await api.mouse('mouseReleased', p.x, p.y);
       return true;
     },
+    /* 原始 CDP 通道：审计脚本要改 viewport（Emulation.setDeviceMetricsOverride）时用 */
+    send(method, params) { return send(method, params); },
+    async viewport(w, h, scale = 1) {
+      await send('Emulation.setDeviceMetricsOverride', {
+        width: w, height: h, deviceScaleFactor: scale, mobile: w < 700,
+      });
+      await new Promise((r) => setTimeout(r, 320));
+    },
+    async clearViewport() { await send('Emulation.clearDeviceMetricsOverride', {}); },
     close() { try { ws.close(); } catch (e) {} },
   };
   return api;
