@@ -518,20 +518,17 @@ button.list-row.tap:active { background: var(--accent-soft); }
 .page-host { position: relative; touch-action: pan-y; min-height: 40dvh; overflow-x: clip; }
 .no-clip .page-host { overflow-x: hidden; }
 .pager-track { position: relative; }
-/* 拖动分页时临时关掉实时模糊：backdrop-filter 每帧都要重算背景，
-   页面上每个 .glass/.btn 都要重算一次，WebView 上会从 60fps 掉到 30fps。
-   这里换成同色系"实心玻璃"，松手立刻恢复原样。 */
-.page-host.pager-live .pager-pane,
-.page-host.pager-live .pager-pane *,
-.page-host.pager-anim .pager-pane,
-.page-host.pager-anim .pager-pane * {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+/* 滑动切页时保留毛玻璃。
+   历史坑：为了省帧率这里曾经把 backdrop-filter 换成 none + 一整套 --mat-live-* 实心色，
+   结果用户看到的就是"一左滑玻璃全变成白块"，观感非常糟（2026-09-20 明确要求改掉）。
+   现在改成"降一档模糊半径"：backdrop-filter 每帧重算背景，半径越大越贵，
+   拖动期间 22px -> 14px、并去掉 saturate 的取色，松手立刻恢复原样，玻璃质感全程保留。 */
+.page-host.pager-live, .page-host.pager-anim {
+  --blur-thin: 10px;
+  --blur-reg: 14px;
+  --blur-thick: 20px;
+  --sat: 1;
 }
-.page-host.pager-live .pager-pane .btn,         .page-host.pager-anim .pager-pane .btn         { background: var(--mat-live-reg); }
-.page-host.pager-live .pager-pane .glass-thin,  .page-host.pager-anim .pager-pane .glass-thin  { background: var(--mat-live-thin); }
-.page-host.pager-live .pager-pane .glass,       .page-host.pager-anim .pager-pane .glass       { background: var(--mat-live-reg); }
-.page-host.pager-live .pager-pane .glass-thick, .page-host.pager-anim .pager-pane .glass-thick { background: var(--mat-live-thick); }
 /* 注意：transform / will-change:transform 会成为 fixed 后代的包含块，
    所以当前页静止时绝对不能带 transform，否则页面里的 FAB / 输入条会跟页面一起滚走 */
 .pager-pane { position: absolute; top: 0; left: 0; width: 100%; backface-visibility: hidden; will-change: transform; }
@@ -587,7 +584,8 @@ button.list-row.tap:active { background: var(--accent-soft); }
 .mk-tile { position: absolute; width: 256px; height: 256px; -webkit-user-drag: none;
   user-select: none; pointer-events: none; background: #e9edf2; }
 .mk-circle { position: absolute; border-radius: 50%; pointer-events: none;
-  background: rgba(10, 108, 255, 0.14); border: 1.5px solid rgba(10, 108, 255, 0.55);
+  /* 用户要求：半径覆盖范围用淡绿色圈 */
+  background: rgba(52, 199, 89, 0.16); border: 1.5px solid rgba(52, 199, 89, 0.62);
   transition: width 180ms var(--ease-out, ease), height 180ms var(--ease-out, ease),
               left 180ms var(--ease-out, ease), top 180ms var(--ease-out, ease); }
 .mk-dot { position: absolute; left: 0; top: 0; width: 16px; height: 16px; margin: -8px 0 0 -8px;

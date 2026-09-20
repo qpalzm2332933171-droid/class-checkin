@@ -169,8 +169,10 @@ def main():
     check("member blocked from admin api", status == 403, res.get("error"))
 
     # ---------- check-in flow ----------
+    sign_at_now = int(time.time()) + 60   # 立刻开放（提前开放时长默认 30 分钟），15 分钟后截止
     status, res = http("POST", "/api/admin/sign-sessions",
-                       {"title": "冒烟测试%02d" % (stamp % 100), "minutes": 30, "late_minutes": 0}, admin_token)
+                       {"title": "冒烟测试%02d" % (stamp % 100), "sign_at": sign_at_now,
+                        "grace_minutes": 15}, admin_token)
     session_id = res.get("id", 0)
     code = res.get("code", "")
     check("admin create sign session", status == 200 and session_id, "id=%s code=%s" % (session_id, code))

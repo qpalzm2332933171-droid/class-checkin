@@ -8,7 +8,7 @@ function fmtDay(ts) {
     String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 }
 
-/* 更新日志：每次更新写一条，发布时会顺手发一条公告推给所有人 */
+/* 更新日志：每次更新写一条，只在这里展示，不再往公告里发（用户要求） */
 registerRoute("/changelog", defineView("changelog", {
   template: `
   <div class="page">
@@ -44,14 +44,11 @@ registerRoute("/changelog", defineView("changelog", {
     <div v-if="sheet" class="sheet">
       <div class="sheet-grab"></div>
       <h3 class="t3">写一条更新</h3>
-      <p class="sub mt2">发布后会同时发一条公告，所有人都能收到弹窗提醒。</p>
+      <p class="sub mt2">发布后只出现在「更新日志」里，不会再往公告里发。</p>
       <input class="field mt4" v-model="form.version" maxlength="24" :placeholder="'版本号，比如 v' + versionH5" />
       <input class="field mt3" v-model="form.title" maxlength="80" placeholder="一句话说明这次更新了什么" />
       <textarea class="field mt3" v-model="form.body" rows="6" maxlength="4000"
                 placeholder="详细内容，一行一条，例如：&#10;· 讨论区新增匿名开关&#10;· 联机对战加入积分排行榜"></textarea>
-      <button class="btn btn-block mt3" :class="{ 'btn-primary': form.announce }" @click="form.announce = !form.announce">
-        {{ form.announce ? '会发公告弹窗（推荐）' : '只写进更新日志，不发公告' }}
-      </button>
       <div class="row gap2 mt4">
         <button class="btn grow" @click="sheet = false">取消</button>
         <button class="btn btn-primary grow" :disabled="!form.title.trim() || busy" @click="submit">
@@ -71,7 +68,7 @@ registerRoute("/changelog", defineView("changelog", {
     const versionH5 = ref(0);
     const sheet = ref(false);
     const busy = ref(false);
-    const form = ref({ version: "", title: "", body: "", announce: true });
+    const form = ref({ version: "", title: "", body: "" });
     const isAdmin = computed(() => !!store.user && store.user.role === "admin");
 
     async function load() {
@@ -83,7 +80,7 @@ registerRoute("/changelog", defineView("changelog", {
     }
 
     function openCompose() {
-      form.value = { version: "v" + (versionH5.value + 1), title: "", body: "", announce: true };
+      form.value = { version: "v" + (versionH5.value + 1), title: "", body: "" };
       sheet.value = true;
     }
 
@@ -93,7 +90,7 @@ registerRoute("/changelog", defineView("changelog", {
       try {
         await api("/api/admin/changelog", { method: "POST", body: {
           version: form.value.version.trim(), title: form.value.title.trim(),
-          body: form.value.body.trim(), announce: form.value.announce } });
+          body: form.value.body.trim(), announce: false } });
         sheet.value = false;
         haptic([10, 30, 10]);
         toast("更新日志已发布", "ok");
