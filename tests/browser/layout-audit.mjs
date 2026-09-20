@@ -69,6 +69,7 @@ const DETECT = `(function(){
   var wrap = [];
   [].slice.call(document.querySelectorAll('body *')).forEach(function(el){
     if (hidden(el) || offPane(el)) return;
+    if (el.hasAttribute('data-ok-wrap')) return;   /* 明确标了"这里换行是设计内的"（比如成员 chip 云） */
     var st = getComputedStyle(el);
     if (st.display !== 'flex' || st.flexWrap !== 'wrap') return;
     var kids = [].slice.call(el.children).filter(function(k){
