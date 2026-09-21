@@ -67,6 +67,13 @@ $assets = Join-Path $Root "app\assets\h5"
 if (Test-Path $assets) { Remove-Item -Recurse -Force $assets }
 New-Item -ItemType Directory -Force -Path $assets | Out-Null
 Copy-Item (Join-Path $Project "web\*") $assets -Recurse -Force
+
+# 3b) 剔除「只从服务器加载」的游戏本体，别塞进 APK。
+#     web/games/danmaku/ 是 iframe 插件式接入的（宿主 gameSrc = mediaUrl("/games/danmaku/index.html")，
+#     mediaUrl() = serverBase() + path），无论 H5 还是安卓壳，iframe 一律指向服务器，包内那份从不加载。
+#     Phaser 版三件套 17.6 MB，内嵌进来只会让 APK 白胖 18 MB。与 tools/publish_h5.py 的 PACKAGE_EXCLUDE 保持一致。
+$assetsGames = Join-Path $assets "games\danmaku"
+if (Test-Path $assetsGames) { Remove-Item -Recurse -Force $assetsGames; Write-Host "== 已剔除 games\danmaku（改由服务器提供） ==" -ForegroundColor DarkGray }
 Write-Host "== 已内嵌 H5 资源: $((Get-ChildItem $assets -Recurse -File).Count) 个文件 ==" -ForegroundColor Cyan
 
 # 4) 生成 BuildConfig.java
