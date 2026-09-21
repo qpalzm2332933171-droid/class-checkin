@@ -200,7 +200,9 @@ try {
     "var u={};rs.forEach(function(x){u[x]=1;});var r0=rs[0];var stack=rs.filter(function(x){return x===r0;}).length;" +
     "return {n:cs.length,uniq:Object.keys(u).length,stack:stack,bg:getComputedStyle(cs[0]).backgroundColor};})())"));
   check('2048：16 个背景块各自独立定位（不再叠成左上角黑块）', b2048.n === 16 && b2048.uniq === 16 && b2048.stack === 1, JSON.stringify(b2048));
-  check('2048：单个背景块只有 10% 白（没有叠成不透明黑）', b2048.bg === 'rgba(255, 255, 255, 0.1)', String(b2048.bg));
+  /* --hair 随深浅色主题切换：浅色 rgba(11,18,32,.08) / 深色 rgba(255,255,255,.1)，都算「半透明、没叠成不透明黑」 */
+  check('2048：背景块保持半透明（没叠成不透明黑）',
+        b2048.bg === 'rgba(255, 255, 255, 0.1)' || b2048.bg === 'rgba(11, 18, 32, 0.08)', String(b2048.bg));
   await A.dismiss();
   await A.clearViewport();
 
