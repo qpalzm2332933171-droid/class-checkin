@@ -40,6 +40,11 @@ public final class Push {
         if (manager == null) {
             return;
         }
+        // 旧版本留下的两条通道要清掉，不然用户在"通知设置"里还会看到一个
+        // 永远不响的「后台值守」和一个过期的「签到提醒」，看着像坏了。
+        manager.deleteNotificationChannel("watch_run");
+        manager.deleteNotificationChannel("watch_alert");
+
         NotificationChannel keep = new NotificationChannel(CH_KEEP, "后台连接", NotificationManager.IMPORTANCE_MIN);
         keep.setShowBadge(false);
         keep.enableVibration(false);
