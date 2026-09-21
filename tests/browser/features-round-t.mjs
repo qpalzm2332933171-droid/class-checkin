@@ -1,6 +1,7 @@
 /* 阶段 T 回归：观战「讨论」悬浮按钮被压扁 · 弹幕全员可见 · 弹幕大战重写（体积/横屏/能玩/记分）
    用法：CDP_PORTS=9336,9337,9338 node features-round-t.mjs
-   账号：gt01 / gt02（两位棋手）、cw01（观战者）、ww01（用来验积分，避开 10 秒冷却） */
+   账号：gt01 / gt02（两位棋手）、cw01（观战者）、ww01（用来验积分，避开 10 秒冷却）
+   口令走环境变量：SOLO_USER / SOLO_PASS（默认 ww01，口令不写进仓库）、ADMIN_PASS、STAFF_PASS */
 import fs from 'node:fs';
 import path from 'node:path';
 import { connect, login, BASE, PORTS } from './harness.mjs';
@@ -116,16 +117,19 @@ try {
   await C.clickSel('#go'); await sleep(600);
   let st = JSON.parse(await C.js("JSON.stringify(window.__dm.st())"));
   check('弹幕大战：点开始进入战斗状态', st.state === 'play', JSON.stringify(st));
-  /* 左右横扫，保证子弹能扫到怪 */
-  for (let i = 0; i < 4 && st.kills === 0; i++) {
-    await C.mouse('mousePressed', 700, 340);
-    for (let k = 1; k <= 14; k++) { await C.mouse('mouseMoved', 700 - k * 42, 340); await sleep(35); }
-    await C.mouse('mouseReleased', 112, 340);
-    await sleep(250);
-    await C.mouse('mousePressed', 112, 340);
-    for (let k = 1; k <= 14; k++) { await C.mouse('mouseMoved', 112 + k * 42, 340); await sleep(35); }
-    await C.mouse('mouseReleased', 700, 340);
-    await sleep(500);
+  /* 左右小幅度摆动扫怪。
+     注意别用大幅横扫：操控是「相对位移 + 撞墙截断」，一次拖 588px 会把飞船死死顶在左右墙上，
+     子弹只从墙边往上升，中间落下来的怪反而一个都打不到（本轮就偶发过一次 kills=0）。 */
+  const midX = 466;
+  for (let i = 0; i < 5 && st.kills === 0; i++) {
+    await C.mouse('mousePressed', midX, 340);
+    for (let k = 1; k <= 10; k++) { await C.mouse('mouseMoved', midX - k * 20, 340); await sleep(40); }
+    await C.mouse('mouseReleased', midX - 200, 340);
+    await sleep(200);
+    await C.mouse('mousePressed', midX, 340);
+    for (let k = 1; k <= 10; k++) { await C.mouse('mouseMoved', midX + k * 20, 340); await sleep(40); }
+    await C.mouse('mouseReleased', midX + 200, 340);
+    await sleep(650);
     st = JSON.parse(await C.js("JSON.stringify(window.__dm.st())"));
   }
   check('弹幕大战：真的能打（拖动操控 + 自动开火能击破，得分 ' + st.score + '）', st.kills > 0 && st.score > 0, JSON.stringify(st));
@@ -156,7 +160,7 @@ try {
 
   /* ---------------------------------------------------------- 7. 服务器积分接口（2 万分 = 1 分，上限 10） */
   const tokenW = await (await fetch(BASE + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'ww01', password: 'wwpass1' }) })).json();
+    body: JSON.stringify({ username: process.env.SOLO_USER || 'ww01', password: process.env.SOLO_PASS || '' }) })).json();
   const post = async (tok, score) => (await (await fetch(BASE + '/api/games/solo/points', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.token },
     body: JSON.stringify({ kind: 'danmaku', score: score }) })).json());
