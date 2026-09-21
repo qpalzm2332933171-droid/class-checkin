@@ -166,8 +166,8 @@ try {
     "phaser:!!f.contentWindow.Phaser,txt:(d.body.innerText||'').replace(/\\s+/g,' ').slice(0,50)});})()");
   const b = JSON.parse(box === 'MISS' ? 'null' : box);
   check('弹幕大战：iframe 铺满屏幕（没被压成 0）', !!b && b.w > 200 && b.h > 300, box);
-  check('弹幕大战：里面真的是游戏（Canvas2D 画布起来了）',
-        inner !== 'MISS' && inner !== 'NO-DOC' && (function () { const d = JSON.parse(inner); return d.canvas > 0 && /弹幕大战/.test(d.title || ''); })(), inner);
+  check('弹幕大战：里面真的是游戏（Phaser 画布起来了）',
+        inner !== 'MISS' && inner !== 'NO-DOC' && (function () { const d = JSON.parse(inner); return d.canvas > 0 && d.phaser === true && /弹幕大战/.test(d.title || ''); })(), inner);
   await C.js("(function(){var e=document.querySelector('.danmaku-back');if(e)e.click();return 'ok';})()");
   await sleep(900);
   check('弹幕大战：能正常返回游戏大厅', (await C.js("location.hash")) === '#/games', await C.js("location.hash"));
