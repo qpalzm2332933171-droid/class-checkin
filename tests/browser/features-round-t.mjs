@@ -192,7 +192,20 @@ try {
   check('弹幕大战：能正常返回游戏大厅', (await C.js('location.hash')) === '#/games', await C.js('location.hash'));
   await C.clearViewport();
 
+  /* ---------------------------------------------------------- 9. 2048：16 个背景块必须各就各位（曾经全叠在左上角 → 黑块，见 #1） */
+  await A.viewport(420, 860);
+  await A.goto(BASE + '/?t=' + Date.now() + '#/games/2048', 2400);
+  const b2048 = JSON.parse(await A.js("JSON.stringify((function(){var cs=[].slice.call(document.querySelectorAll('.cell-bg'));" +
+    "if(!cs.length)return {n:0};var rs=cs.map(function(e){var b=e.getBoundingClientRect();return [Math.round(b.left),Math.round(b.top)].join(',');});" +
+    "var u={};rs.forEach(function(x){u[x]=1;});var r0=rs[0];var stack=rs.filter(function(x){return x===r0;}).length;" +
+    "return {n:cs.length,uniq:Object.keys(u).length,stack:stack,bg:getComputedStyle(cs[0]).backgroundColor};})())"));
+  check('2048：16 个背景块各自独立定位（不再叠成左上角黑块）', b2048.n === 16 && b2048.uniq === 16 && b2048.stack === 1, JSON.stringify(b2048));
+  check('2048：单个背景块只有 10% 白（没有叠成不透明黑）', b2048.bg === 'rgba(255, 255, 255, 0.1)', String(b2048.bg));
+  await A.dismiss();
+  await A.clearViewport();
+
 } catch (err) {
+
   out.push('FAIL  用例异常: ' + err.message);
 }
 
