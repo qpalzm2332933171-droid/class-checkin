@@ -7,6 +7,8 @@ data/
 
 # 私有：含服务器地址与口令，仅本地保留
 开发指南.md
+# 由@Getusol添加 开发指南的别名
+ForDev.md 
 docs/账号表.csv
 tests/browser/accounts.json
 

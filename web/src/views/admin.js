@@ -96,7 +96,7 @@ registerRoute("/admin", defineView("admin", {
       </div>
 
       <h2 class="section-title">在线同学</h2>
-      <div class="glass glass-thin ad-card ad-wrap">
+      <div class="glass glass-thin ad-card ad-wrap" data-ok-wrap>
         <span v-for="n in onlineUsers" :key="n" class="chip chip-green">{{ n }}</span>
         <span v-if="!onlineUsers.length" class="sub">当前没人挂着</span>
       </div>
@@ -319,7 +319,7 @@ registerRoute("/admin", defineView("admin", {
             <button class="btn btn-icon" title="导出这一场" @click="exportRecords(rosterSession.id)"><Icon n="download" :size="17" /></button>
             <button class="btn btn-icon" title="删除场次" @click="removeSession(rosterSession)"><Icon n="trash" :size="17" /></button>
           </div>
-          <div class="ad-wrap mt3">
+          <div class="ad-wrap mt3" data-ok-wrap>
             <span class="chip chip-green">已签到 {{ rosterCounts.present || 0 }}</span>
             <span class="chip chip-orange">迟到 {{ rosterCounts.late || 0 }}</span>
             <span class="chip">请假 {{ rosterCounts.leave || 0 }}</span>

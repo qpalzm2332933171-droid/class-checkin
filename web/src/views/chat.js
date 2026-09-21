@@ -42,7 +42,9 @@ function setAnonMode(on) {
 }
 
 const SHARED_STYLE = `
-  .live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  /* 注意：视图 style 是全局注入的，别用 .live / .off / .on 这种太普通的类名（会串到别的组件，
+     曾经把对局讨论的悬浮按钮压成 7px 绿点），统一加 chat- 前缀 */
+  .chat-live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green);
     margin-right: 6px; box-shadow: 0 0 0 4px var(--green-soft); }
   /* 讨论主界面的匿名开关：默认实名，开了之后所有话题都匿名发言 */
   .anon-pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--hair);
@@ -72,7 +74,7 @@ registerRoute("/chat", defineView("chatTopics", {
     <header class="big-title row-between">
       <div style="min-width:0">
         <h1 class="t1">班级讨论</h1>
-        <p class="sub mt2"><span class="live"></span>{{ store.online }} 人在线 · 我是 <b>{{ anonMode ? (store.alias || '匿名同学') : myName }}</b></p>
+        <p class="sub mt2"><span class="chat-live"></span>{{ store.online }} 人在线 · 我是 <b>{{ anonMode ? (store.alias || '匿名同学') : myName }}</b></p>
       </div>
       <div class="row gap2">
         <button class="anon-pill" :class="{ on: anonMode }" @click="setAnonMode(!anonMode)">

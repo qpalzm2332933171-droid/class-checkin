@@ -24,7 +24,8 @@ registerRoute("/games/2048", defineView("game2048", {
 
     <div class="board-wrap" @pointerdown="onDown" @pointerup="onUp" @pointermove="onMove">
       <div class="board-2048 glass glass-liquid">
-        <div class="cell-bg" v-for="i in 16" :key="'b'+i"></div>
+        <div class="cell-bg" v-for="i in 16" :key="'b'+i"
+            :style="tileStyle({ r: Math.floor((i-1)/4), c: (i-1)%4 })"></div>
         <div v-for="tile in tiles" :key="tile.id" class="tile" :class="'v' + Math.min(tile.v, 4096)"
              :style="tileStyle(tile)">
           <span>{{ tile.v }}</span>

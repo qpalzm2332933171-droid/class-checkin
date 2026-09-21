@@ -3,6 +3,9 @@ import {
   confirmDialog,
 } from "../ui.js";
 import { useRoom } from "../room.js";
+import {
+  BGM_GAMES, bgmMuted, bgmBlocked, preloadGameBgm, playGameBgm, stopGameBgm, setBgmMuted,
+} from "../bgm.js";
 
 registerRoute("/games/board", defineView("gameBoard", {
   template: `
@@ -10,10 +13,14 @@ registerRoute("/games/board", defineView("gameBoard", {
     <MatchChat />
     <header class="row gap3 head">
       <button class="btn btn-icon glass glass-thin" @click="leaveRoom(false)"><Icon n="back" :size="20" /></button>
-      <div class="grow">
-        <h1 class="t2">{{ roomName }}</h1>
+      <div class="grow elide-box">
+        <h1 class="t2 elide">{{ roomName }}</h1>
         <p class="sub">{{ statusText }}</p>
       </div>
+      <button v-if="showBgm" class="btn btn-icon glass glass-thin bgm-toggle" :class="{ 'bgm-off': bgmMuted, 'bgm-live': bgmPlaying }"
+              :aria-label="bgmLabel" :title="bgmLabel" @click="toggleBgm">
+        <Icon :n="bgmIcon" :size="19" />
+      </button>
       <button class="btn glass glass-thin code-btn" @click="copyCode">房间 {{ roomCode }}</button>
     </header>
 
@@ -122,6 +129,12 @@ registerRoute("/games/board", defineView("gameBoard", {
   .overlay { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + var(--s6));
     padding: var(--s5); border-radius: var(--r-xl); text-align: center; width: min(90vw, 400px); z-index: 30; }
   .green-text { color: var(--green); font-weight: 600; }
+  .elide-box { min-width: 0; }
+  /* 开局背景音乐开关：放音中跟着节拍轻轻呼吸，关掉后变灰 */
+  .bgm-toggle { color: var(--accent); }
+  .bgm-toggle.bgm-off { color: var(--ink-3); }
+  .bgm-toggle.bgm-live { animation: bgm-breath 2.6s ease-in-out infinite; }
+  @keyframes bgm-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   `,
   setup() {
     const roomApi = useRoom("/games/board");
@@ -184,6 +197,32 @@ registerRoute("/games/board", defineView("gameBoard", {
     }
     const unwatch = watch(roomApi.room, syncBoard, { immediate: true });
 
+    /* ---------- 开局背景音乐（五子棋 / 围棋） ---------- */
+    const bgmRoom = computed(() => !!roomApi.room.value && BGM_GAMES.indexOf(roomApi.room.value.game) >= 0);
+    const bgmLive = computed(() => bgmRoom.value && roomApi.room.value?.state?.status === "playing");
+    const showBgm = computed(() => bgmLive.value);
+    /* 只有真的在出声才播"呼吸"动画：关掉了 / 被浏览器拦着就别闪 */
+    const bgmPlaying = computed(() => bgmLive.value && !bgmMuted.value && !bgmBlocked.value);
+    const bgmLabel = computed(() => {
+      if (bgmMuted.value) return "背景音乐已关闭，点一下重新播放";
+      if (bgmBlocked.value) return "点一下播放背景音乐";
+      return "关闭背景音乐";
+    });
+    const bgmIcon = computed(() => (bgmMuted.value ? "musicOff" : "music"));
+
+    function toggleBgm() {
+      if (bgmMuted.value) { setBgmMuted(false); playGameBgm(); return; }
+      if (bgmBlocked.value) { playGameBgm(); return; }
+      setBgmMuted(true);
+      toast("已关闭背景音乐，点顶部的音符可以再打开", "info", 2600);
+    }
+
+    const unwatchBgm = watch(() => (roomApi.room.value?.state?.status || ""), (status) => {
+      if (status === "playing" && bgmRoom.value) playGameBgm();
+      else if (status !== "playing") stopGameBgm();
+    });
+    const unwatchPreload = watch(bgmRoom, (yes) => { if (yes) preloadGameBgm(); }, { immediate: true });
+
     function play(index) {
       if (!roomApi.room.value?.started || finished.value) return;
       if (roomApi.isSpectator.value) { toast("观战模式不能落子", "warn"); return; }
@@ -208,10 +247,16 @@ registerRoute("/games/board", defineView("gameBoard", {
         .then((yes) => { if (yes) wsSend({ t: "game.move", resign: true }); });
     }
 
-    onUnmounted(() => { if (unwatch) unwatch(); });
+    onUnmounted(() => {
+      if (unwatch) unwatch();
+      if (unwatchBgm) unwatchBgm();
+      if (unwatchPreload) unwatchPreload();
+      stopGameBgm();
+    });
 
     return { ...roomApi, board, size, last, players, spectators, finished, myMark, isMyTurn, canStart, isSpectator: roomApi.isSpectator,
              statusText, resultTitle, resultReason, markOf, isTurn, play, start, mediaUrl,
-             isGo, captures, passes, passMove, resign, stars };
+             isGo, captures, passes, passMove, resign, stars,
+             showBgm, bgmMuted, bgmLive, bgmPlaying, bgmIcon, bgmLabel, toggleBgm };
   },
 }));

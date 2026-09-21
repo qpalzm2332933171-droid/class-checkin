@@ -23,6 +23,7 @@ import "./views/game-draw.js";
 import "./views/game-bomb.js";
 import "./views/game-2048.js";
 import "./views/game-mine.js";
+import "./views/game-danmaku.js";
 import "./views/notfound.js";
 
 const TABS = [
@@ -73,14 +74,16 @@ const Root = {
     function noteLiveRoom(msg) { if (msg && msg.room) liveRoom = msg.room; }
 
     function fanOut(chat) {
-      if (!chat || !chat.spec) return;                       // 只有观战者的发言飘弹幕
-      const uid = store.user && store.user.id;
-      if (!uid || !liveRoom || !liveRoom.started || liveRoom.finished) return;
-      if (!(liveRoom.players || []).some((p) => p.uid === uid)) return;
+      /* 房间里所有人（两个棋手 + 所有观战者）发的讨论都变成弹幕，所有人也都看得见；
+         自己发的那条也会从自己屏幕上飘过去，方便确认发出去了。 */
+      if (!chat || !chat.text) return;
+      if (!liveRoom || !liveRoom.started || liveRoom.finished) return;
+      if (!(liveRoom.players || []).length) return;
       const text = String(chat.text || "").slice(0, 60);
       if (!text) return;
       const id = ++danmakuSeq;
-      danmaku.value.push({ id, name: chat.name || "观战", text, lane: id % 3 });
+      danmaku.value.push({ id, name: chat.name || "同学", text, lane: id % 3,
+                                         me: chat.uid === (store.user && store.user.id) });
       while (danmaku.value.length > 6) danmaku.value.shift();
       setTimeout(() => { danmaku.value = danmaku.value.filter((d) => d.id !== id); }, 12000);
     }
@@ -458,8 +461,10 @@ const Root = {
       onWs("game.state", noteLiveRoom);
       onWs("game.update", noteLiveRoom);
       onWs("game.over", noteLiveRoom);
-      onWs("game.left", () => { liveRoom = null; });
       onWs("game.chat", (msg) => fanOut(msg.chat));
+      /* 离开/报错后清掉房间与残留弹幕 */
+      onWs("game.left", () => { liveRoom = null; danmaku.value = []; });
+      onWs("game.error", () => { liveRoom = null; danmaku.value = []; });
       onWs("announce", (msg) => {
         const item = { id: msg.id, content: msg.content, created_at: msg.created_at, author: msg.author || "班级公告", read: false };
         store.announcements = [item].concat(store.announcements || []);
@@ -472,6 +477,11 @@ const Root = {
 
     watch(() => route.path, (path) => {
       if (!booting.value && !store.user && path !== "/login") navigate("/login", true);
+      /* 离开房间（点返回/退出，服务端不一定回 game.left）就地收掉弹幕层，
+         否则回到大厅还会飘十几秒房间里的旧消息。
+         判断依据是 URL 上的 ?room= —— 每个联机游戏的房间路由都带它，
+         不能用路径白名单（象棋/狼人杀/画猜各自是独立路由）。 */
+      if (!route.query.room) { liveRoom = null; danmaku.value = []; }
       window.scrollTo({ top: 0, behavior: "instant" });
     });
 
@@ -565,7 +575,8 @@ const Root = {
       </div>
 
       <div class="danmaku-layer" aria-hidden="true">
-        <div v-for="d in danmaku" :key="d.id" class="danmaku" :style="{ top: (14 + d.lane * 34) + 'px' }">
+        <div v-for="d in danmaku" :key="d.id" class="danmaku" :class="{ me: d.me }"
+             :style="{ top: (14 + d.lane * 34) + 'px' }">
           <b>{{ d.name }}</b><span>{{ d.text }}</span>
         </div>
       </div>
