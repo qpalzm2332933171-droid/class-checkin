@@ -43,6 +43,7 @@ python D:\learn\class-checkin\tests\smoke.py http://127.0.0.1:8081 <管理员密
 ## 服务器
 
 - 地址：`http://<你的公网IP>:<外网端口>/`（面板 NAT 映射 外网端口 → 内网 18100）
+- 网页端定位签到要 HTTPS：`deploy/https_setup.sh` 一键开一个 HTTPS 监听（自签证书，见 `docs/部署说明.md`）
 - 服务：`systemctl {status|restart} class-checkin`，日志 `/opt/class-checkin/data/server.log`
 - 数据库：`/opt/class-checkin/data/app.db`（后台"高级"页可一键下载备份）
 - 重新部署：`deploy\redeploy.ps1`（默认 ssh 别名 `vanmc`，可 `-Remote <别名>` 覆盖）
@@ -82,4 +83,4 @@ python tools\publish_h5.py http://<你的服务器>:<端口> <管理员密码> "
 
 - 签到峰值仅 25 人 / 3 分钟，2 核 4G 的服务器用标准库单进程足够，省掉依赖地狱
 - 免构建前端 = 改一个文件立刻生效，适合课间五分钟改需求
-- WebSocket 自研让整个系统只需 1 个公网端口（HTTP 与 WS 共用）
+- WebSocket 自研让 HTTP 与 WS 共用 1 个公网端口（HTTPS 是可选的第二个端口，只给网页端定位用）

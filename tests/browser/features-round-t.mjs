@@ -109,7 +109,12 @@ try {
   const bgmSize = fs.statSync(path.join(dir, 'bgm.mp3')).size;
   check('弹幕大战：三件套齐全（index.html + phaser.min.js + bgm.mp3）',
         JSON.stringify(files) === JSON.stringify(['bgm.mp3', 'index.html', 'phaser.min.js']), JSON.stringify(files));
-  check('弹幕大战：index.html 内嵌 BGM（' + (gsize / 1048576).toFixed(1) + 'MB）', gsize > 5 * 1024 * 1024, gsize + ' bytes');
+  /* 曾经 index.html 里内联了一份 9.8MB 的 base64 BGM（与 bgm.mp3 逐字节相同），
+     页面 9.9MB → 手机 3Mbps 下要 30 秒才能跑到游戏，期间只有黑屏 + TIME 00:00。
+     现在只保留外部 bgm.mp3，页面必须保持「小」。 */
+  check('弹幕大战：index.html 不再内嵌音频（' + (gsize / 1024).toFixed(1) + 'KB）', gsize < 512 * 1024, gsize + ' bytes');
+  check('弹幕大战：index.html 里没有 data:audio 内联',
+        !/data:audio\//.test(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')), 'still inlined');
   check('弹幕大战：引擎与回退音源就位（' + (phSize / 1024).toFixed(0) + 'KB / ' + (bgmSize / 1024).toFixed(0) + 'KB）',
         phSize > 500 * 1024 && bgmSize > 3 * 1024 * 1024, phSize + '/' + bgmSize);
 

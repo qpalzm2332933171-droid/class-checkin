@@ -661,3 +661,64 @@ button.list-row.tap:active { background: var(--accent-soft); }
 .mc-row.spec .mc-text { color: var(--ink-2); }
 .mc-form { display: flex; gap: 9px; padding-top: var(--s3); border-top: 1px solid var(--hair); }
 .mc-form .field { flex: 1; }
+
+/* ------------------------------------------------------ 个人主页浮窗 */
+.scrim-soft { background: rgba(6, 8, 14, 0.3); }
+.prof-modal { width: min(360px, calc(100vw - 44px)); }
+.prof-loading { display: flex; align-items: center; justify-content: center; gap: var(--s3); padding: var(--s5) 0; color: var(--ink-3); }
+.prof-top { display: flex; align-items: center; gap: var(--s4); }
+.prof-name { margin: 0; }
+.prof-bio {
+  margin: var(--s4) 0 0; padding: var(--s3) var(--s4); border-radius: var(--r-md);
+  background: var(--mat-thin); border: 1px solid var(--hair);
+  font-size: var(--fs-callout); line-height: 1.5; color: var(--ink); word-break: break-word;
+}
+.prof-bio.empty { color: var(--ink-3); }
+.prof-class { display: flex; align-items: center; gap: 6px; margin-top: var(--s3); font-size: var(--fs-foot); color: var(--ink-2); }
+.prof-scores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); margin-top: var(--s4); }
+.prof-score {
+  display: flex; flex-direction: column; gap: 1px; padding: 10px var(--s3);
+  background: var(--mat-thin); border: 1px solid var(--hair); border-radius: var(--r-md); min-width: 0;
+}
+.prof-score b { font-size: var(--fs-title3); color: var(--ink); line-height: 1.2; }
+.prof-score b i { font-style: normal; color: var(--ink-3); margin: 0 1px; font-size: var(--fs-body); }
+.prof-score span { font-size: var(--fs-cap); color: var(--ink-3); letter-spacing: 0.02em; }
+
+/* 班级选择框（只有总管理员看得到） */
+/* 网页端 HTTPS 提示条：在文档流里（不是浮层），不会盖住任何内容 */
+.https-bar {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: nowrap;
+  margin: calc(var(--safe-t) + var(--s3)) var(--s4) 0;
+  padding: 8px 8px 8px 12px; border-radius: var(--r-full);
+  background: var(--accent-soft); color: var(--accent);
+  backdrop-filter: blur(18px) saturate(180%); -webkit-backdrop-filter: blur(18px) saturate(180%);
+}
+.https-bar > span { font-size: var(--fs-cap); font-weight: 600; min-width: 0; }
+.https-bar .btn { flex: 0 0 auto; }
+.https-bar-x {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; border: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: inherit; opacity: .6;
+}
+.https-bar-x:active { opacity: 1; }
+
+.class-bar { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s3); }
+.class-bar .field { flex: 1; min-width: 0; }
+.class-select { min-width: 0; }
+.class-tag {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--r-full);
+  font-size: var(--fs-cap); font-weight: 600; background: var(--accent-soft); color: var(--accent);
+  max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.class-tag.public { background: var(--green-soft); color: var(--green); }
+
+/* 班级管理（设置页里的卡片） */
+.cls-row { display: flex; align-items: center; gap: var(--s3); padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.cls-row:last-child { border-bottom: 0; }
+.cls-row .cls-name { font-weight: 600; font-size: var(--fs-callout); }
+.cls-row .cls-meta { font-size: var(--fs-cap); color: var(--ink-3); }
+.cls-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+
+/* 在线同学：带班级的 chip */
+.chip-online { display: inline-flex; align-items: center; gap: 6px; }
+.chip-online .avatar { width: 20px; height: 20px; font-size: 10px; }

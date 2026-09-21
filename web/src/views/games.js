@@ -1,6 +1,6 @@
 import {
   defineView, registerRoute, ref, computed, onMounted, onUnmounted, nextTick, api, store, navigate, toast, onWs, wsSend,
-  haptic, registerSwipe, pillStyle, mediaUrl,
+  haptic, registerSwipe, pillStyle, mediaUrl, openUserProfile,
 } from "../ui.js";
 
 const SINGLE = [
@@ -181,7 +181,8 @@ registerRoute("/games", defineView("games", {
         ? '和别人打一局：赢 +2 分，输 -1 分（平局不加不减）'
         : '扫雷：正常 +1 / 困难 +2 / 极难 +3；2048：每合成一个 2048 +1；弹幕大战：每 2 万分 +1（单局上限 10）' }}</p>
       <div class="glass glass-thin list mt3 board-list">
-        <div v-for="row in board.rows" :key="row.uid" class="list-row" :class="{ me: row.uid === myId }">
+        <button v-for="row in board.rows" :key="row.uid" class="list-row tap" :class="{ me: row.uid === myId }"
+                @click="openProfile(row.uid)">
           <span class="rank" :class="'r' + Math.min(row.rank, 4)">{{ row.rank }}</span>
           <span class="avatar avatar-sm" :style="{ background: row.color || '#8a94a6' }">
             <img v-if="row.avatar" :src="mediaUrl(row.avatar)" :alt="row.name" loading="lazy" />
@@ -189,7 +190,7 @@ registerRoute("/games", defineView("games", {
           </span>
           <span class="grow elide">{{ row.name }}<span v-if="row.uid === myId" class="cap"> · 我</span></span>
           <b class="num">{{ board.scope === 'online' ? row.online : row.solo }}</b>
-        </div>
+        </button>
         <div v-if="!board.rows.length" class="list-row sub">还没有人得分，去开一局吧</div>
       </div>
       <p class="cap mt3">我的名次：{{ board.my_rank || '未上榜' }} · 总积分 {{ board.me ? board.me.total : 0 }}
@@ -325,6 +326,12 @@ registerRoute("/games", defineView("games", {
       await loadBoard(scope);
     }
 
+    function openProfile(uid) {
+      const id = Number(uid || 0);
+      if (!id || id === myId.value) return;   // 自己的卡片不用弹
+      openUserProfile(id);
+    }
+
     async function switchScope(scope) {
       if (!board.value || board.value.scope === scope) return;
       board.value.scope = scope;
@@ -434,7 +441,7 @@ registerRoute("/games", defineView("games", {
 
     return { tab, rooms, records, dialog, codeInput, haptic, onlineGames: ONLINE, singleGames: SINGLE,
              board, boardSegEl, boardPill, myId, myPoints, openBoard, switchScope, store,
-             trackEl, segEl, pill, xAnim, mediaUrl,
+             trackEl, segEl, pill, xAnim, mediaUrl, openProfile,
              refresh, setTab, pick, back, closeDialog, doCreate, doJoin, joinRoom, spectate,
              nameOf, shortTime, winnersText, navigate };
   },

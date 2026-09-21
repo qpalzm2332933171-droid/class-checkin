@@ -83,8 +83,13 @@ async function connect(port) {
 
 const HELPERS = "window.__T={clickExact:function(t,sel){var l=[].slice.call(document.querySelectorAll(sel||'button'));var e=l.filter(function(x){return (x.textContent||'').trim()===t;})[0];if(!e)return 'MISS';e.click();return 'OK';},clickText:function(t,sel){var l=[].slice.call(document.querySelectorAll(sel||'button'));var e=l.filter(function(x){return (x.textContent||'').trim().indexOf(t)>=0;})[0];if(!e)return 'MISS';e.click();return 'OK';},setField:function(sel,val){var el=document.querySelector(sel);if(!el)return 'MISS';var s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;s.call(el,val);el.dispatchEvent(new Event('input',{bubbles:true}));return 'OK';}};'ready'";
 
+/* 用 accounts.json 里的账号登录；不认识的名字直接抛错 */
 async function login(page, who, routePath) {
-  const token = await tokenFor(who);
+  return loginAs(page, await tokenFor(who), routePath);
+}
+
+/* 用显式 token 登录（临时账号 / 测试自己造出来的账号走这条） */
+async function loginAs(page, token, routePath) {
   await page.goto(BASE + '/', 600);
   await page.js("localStorage.setItem('checkin_token','" + token + "');'ok'");
   await page.js("location.reload();'r'");
@@ -93,4 +98,13 @@ async function login(page, who, routePath) {
   await page.js(HELPERS);
 }
 
-export { connect, login, HELPERS, BASE, PORTS };
+/* 用账号密码现登一次，拿 token（测试自己建的账号用这个） */
+async function tokenWith(creds) {
+  const res = await fetch(BASE + '/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(creds),
+  });
+  if (!res.ok) throw new Error('登录失败 ' + creds.username + ' -> HTTP ' + res.status);
+  return (await res.json()).token;
+}
+
+export { connect, login, loginAs, tokenWith, HELPERS, BASE, PORTS };

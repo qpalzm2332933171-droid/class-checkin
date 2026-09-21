@@ -1,9 +1,11 @@
 """HTTP + WebSocket server (stdlib asyncio, no third-party packages)."""
 
 import asyncio
+import contextlib
 import hashlib
 import mimetypes
 import os
+import ssl
 import sys
 import time
 import urllib.parse
@@ -26,6 +28,20 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("application/zip", ".zip")
 mimetypes.add_type("audio/mpeg", ".mp3")
+mimetypes.add_type("application/x-x509-ca-cert", ".crt")
+mimetypes.add_type("application/x-x509-ca-cert", ".cer")
+
+# ------------------------------------------------------------------ HTTPS
+# 默认还是纯 HTTP（行为跟以前一模一样）；只有在 systemd 里配了证书+端口才多开一个
+# HTTPS 监听。浏览器把「非安全上下文」的 navigator.geolocation 直接禁用，
+# 所以网页端要定位签到就必须走这条路。
+TLS_CERT = os.environ.get("CHECKIN_TLS_CERT") or ""
+TLS_KEY = os.environ.get("CHECKIN_TLS_KEY") or ""
+TLS_CA = os.environ.get("CHECKIN_TLS_CA") or ""
+try:
+    TLS_PORT = int(os.environ.get("CHECKIN_TLS_PORT") or 0)
+except ValueError:
+    TLS_PORT = 0
 
 ROUTES = []
 LOGIN_FAILS = {}
@@ -62,25 +78,42 @@ def fail(status, message, **extra):
     return Response(status, dumps(payload))
 
 
-def route(method, path, auth_required=True, admin=False, staff=False):
-    """admin=True -> 仅管理员; staff=True -> 管理员或资委。"""
+def route(method, path, auth_required=True, admin=False, staff=False, manage=False):
+    """admin=True -> 仅总管理员; manage=True -> 总管理员或「管理员(xx班)」;
+    staff=True -> 总管理员/班级管理员/资委/学委。"""
     def wrapper(fn):
-        ROUTES.append((method.upper(), path, fn, auth_required, admin, staff))
+        ROUTES.append((method.upper(), path, fn, auth_required, admin, staff, manage))
         return fn
     return wrapper
 
 
+# 角色一览：
+#   admin       总管理员（最高权限，能管所有班级）
+#   class_admin 管理员(xx班) —— 只管自己班
+#   committee   资委（本班）
+#   study       学委（本班）
+#   member      普通成员
+# is_staff 只回答「有没有管理台资格」，具体能看哪个班的数据由 api.py 里的
+# class_scope() 再收一次口子，别把两者混为一谈。
+STAFF_ROLES = ("admin", "class_admin", "committee", "study")
+
+
 def is_staff(user):
-    return bool(user and user.get("role") in ("admin", "committee", "study"))
+    return bool(user and user.get("role") in STAFF_ROLES)
+
+
+def is_manager(user):
+    """总管理员或班级管理员 —— 能进「成员管理」这一档。"""
+    return bool(user and user.get("role") in ("admin", "class_admin"))
 
 
 def match_route(method, path):
-    for m, pattern, fn, need_auth, need_admin, need_staff in ROUTES:
+    for m, pattern, fn, need_auth, need_admin, need_staff, need_manage in ROUTES:
         if m != method:
             continue
         if "{" not in pattern:
             if pattern == path:
-                return fn, {}, need_auth, need_admin, need_staff
+                return fn, {}, need_auth, need_admin, need_staff, need_manage
             continue
         p_parts = pattern.strip("/").split("/")
         r_parts = path.strip("/").split("/")
@@ -93,12 +126,16 @@ def match_route(method, path):
             elif pp != rp:
                 break
         else:
-            return fn, params, need_auth, need_admin, need_staff
-    return None, None, None, None, None
+            return fn, params, need_auth, need_admin, need_staff, need_manage
+    return None, None, None, None, None, None
 
 
 class Request:
     def __init__(self, method, path, query, headers, reader, writer, client_ip):
+        try:
+            self.scheme = "https" if writer.get_extra_info("sslcontext") is not None else "http"
+        except (AttributeError, NotImplementedError):
+            self.scheme = "http"
         self.method = method
         self.path = path
         self.query = query
@@ -135,7 +172,7 @@ class Request:
 
     def public_base(self):
         host = self.header("host") or "localhost"
-        return "http://" + host
+        return self.scheme + "://" + host
 
 
 async def read_request(reader, writer, client_ip):
@@ -242,6 +279,28 @@ async def serve_static(req):
     return Response(200, body, ctype, {"ETag": etag, "Cache-Control": cache})
 
 
+def build_ssl_context():
+    """配了证书就返回 SSLContext；没配 / 读不到就返回 None（纯 HTTP，跟以前完全一样）。"""
+    if not (TLS_CERT and TLS_KEY):
+        return None
+    if not (os.path.isfile(TLS_CERT) and os.path.isfile(TLS_KEY)):
+        log("WARN", "找不到 TLS 证书/私钥，本次只跑 HTTP：", TLS_CERT, TLS_KEY)
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+    return ctx
+
+
+def serve_ca_cert():
+    """把自签 CA 证书公开出去，方便手机下载后装成受信任的根证书。"""
+    if not TLS_CA or not os.path.isfile(TLS_CA):
+        return None
+    with open(TLS_CA, "rb") as fh:
+        body = fh.read()
+    return Response(200, body, "application/x-x509-ca-cert", {"Cache-Control": "no-cache"})
+
+
 def check_login_throttle(ip):
     bucket = LOGIN_FAILS.get(ip)
     if not bucket:
@@ -261,7 +320,10 @@ def note_login_fail(ip):
 
 
 async def dispatch(req):
-    fn, params, need_auth, need_admin, need_staff = match_route(req.method, req.path)
+    if req.method in ("GET", "HEAD") and req.path == "/checkin-ca.crt":
+        resp = serve_ca_cert()
+        return resp if resp else fail(404, "没有配置自签证书")
+    fn, params, need_auth, need_admin, need_staff, need_manage = match_route(req.method, req.path)
     if fn is None:
         if req.path.startswith("/api/"):
             return fail(404, "接口不存在")
@@ -276,6 +338,8 @@ async def dispatch(req):
     if need_auth and not req.user:
         return fail(401, "请先登录")
     if need_admin and (not req.user or req.user.get("role") != "admin"):
+        return fail(403, "需要管理员权限")
+    if need_manage and not is_manager(req.user):
         return fail(403, "需要管理员权限")
     if need_staff and not is_staff(req.user):
         return fail(403, "需要管理员或资委权限")
@@ -333,12 +397,23 @@ async def main():
         from bootstrap import create_default_users
         create_default_users()
     server = await asyncio.start_server(handle_connection, host, port)
+    listeners = [server]
+    ssl_ctx = build_ssl_context()
+    if ssl_ctx and TLS_PORT:
+        tls_server = await asyncio.start_server(handle_connection, host, TLS_PORT, ssl=ssl_ctx)
+        listeners.append(tls_server)
+    elif ssl_ctx:
+        log("WARN", "有证书但 CHECKIN_TLS_PORT 没配，HTTPS 没起来")
     ws.start_background_tasks()
     # 游戏对局的后台推进器：画猜倒计时、狼人杀阶段计时、掉线清理全靠它
     import games
     asyncio.ensure_future(games.ticker())
     log("check-in server listening on %s:%d  (web root: %s)" % (host, port, WEB_DIR))
-    async with server:
+    if len(listeners) > 1:
+        log("check-in server https listening on %s:%d" % (host, TLS_PORT))
+    async with contextlib.AsyncExitStack() as stack:
+        for one in listeners:
+            await stack.enter_async_context(one)
         await asyncio.Event().wait()
 
 

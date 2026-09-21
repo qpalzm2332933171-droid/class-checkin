@@ -50,12 +50,25 @@ def drop_user_sessions(user_id):
     execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
 
 
+def class_name_of(cid):
+    """班级名。0 = 未指定班级，返回空串，前端会自己兜底。"""
+    cid = int(cid or 0)
+    if not cid:
+        return ""
+    row = query_one("SELECT name FROM classes WHERE id = ?", (cid,))
+    return row["name"] if row else ""
+
+
 def public_user(row, viewer=None):
     """Shape a user row for the client. Admins see more."""
     if not row:
         return None
-    is_admin = bool(viewer and viewer.get("role") == "admin")
+    viewer_role = (viewer or {}).get("role") or ""
+    is_admin = viewer_role == "admin"
     is_self = bool(viewer and viewer.get("id") == row.get("id"))
+    # 班级管理员管本班成员，得看得见封禁/备注这些管理字段
+    same_class = int((viewer or {}).get("class_id") or 0) == int(row.get("class_id") or 0)
+    is_class_admin = viewer_role == "class_admin" and same_class and int(row.get("class_id") or 0) != 0
     data = {
         "id": row["id"],
         "username": row["username"],
@@ -65,11 +78,14 @@ def public_user(row, viewer=None):
         "color": row.get("color") or "",
         "muted": row.get("muted") or 0,
         "created_at": row.get("created_at") or 0,
+        "class_id": int(row.get("class_id") or 0),
+        "class_name": class_name_of(row.get("class_id")),
+        "bio": row.get("bio") or "",
     }
-    if is_admin or is_self:
+    if is_admin or is_class_admin or is_self:
         data["banned"] = row.get("banned") or 0
         data["note"] = row.get("note") or ""
         data["last_login"] = row.get("last_login") or 0
-    if is_admin:
+    if is_admin or is_class_admin:
         data["username"] = row["username"]
     return data

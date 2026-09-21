@@ -3,10 +3,12 @@ import {
   createApp, ref, computed, onMounted, watch, nextTick,
   store, api, setToken, startRouter, currentView, navigate, route,
   wsConnect, onWs, toast, haptic, resolveSwipe, resolveBack, viewFor, waitServer,
-  loadAnnouncements, ackAnnouncements, isApp, confirmDialog,
+  loadAnnouncements, ackAnnouncements, isApp, confirmDialog, mediaUrl, closeUserProfile,
+  needHttps, goHttps,
 } from "./ui.js";
 import { Icon } from "./icons.js";
 import { MatchChat } from "./matchchat.js";
+import { isStaff as isStaffRole, roleLabelOf, classNameOf } from "./roles.js";
 
 import "./views/login.js";
 import "./views/home.js";
@@ -45,7 +47,7 @@ const Root = {
     const booting = ref(true);
     const view = computed(() => currentView());
     const isLogin = computed(() => route.path === "/login");
-    const isStaff = computed(() => !!store.user && ["admin", "committee", "study"].includes(store.user.role));
+    const isStaff = computed(() => isStaffRole(store.user));
     const tabs = computed(() => {
       const list = TABS.slice();
       if (isStaff.value) list.push({ path: "/admin", label: "管理", icon: "shield" });
@@ -130,6 +132,20 @@ const Root = {
       store.updateInfo = null;
     }
 
+    /* 网页端定位签到必须走 HTTPS（浏览器不给 http 页面 geolocation），
+       服务端开了 HTTPS 就在这里提示一下；关掉记一 session，别一直烦人。 */
+    const httpsBar = ref(false);
+    function refreshHttpsBar() {
+      let closed = false;
+      try { closed = sessionStorage.getItem("https_hint_off") === "1"; } catch (err) { closed = false; }
+      httpsBar.value = !closed && needHttps();
+    }
+    function dismissHttpsBar() {
+      httpsBar.value = false;
+      try { sessionStorage.setItem("https_hint_off", "1"); } catch (err) { /* ignore */ }
+    }
+    watch(() => [route.path, store.user && store.user.id, store.settings], refreshHttpsBar);
+
     async function boot() {
       if (isApp()) await waitServer(2500);   // 等壳注入服务器地址，否则冷启动会误判未登录
       try {
@@ -155,6 +171,7 @@ const Root = {
       if (store.user && route.path === "/login") navigate("/", true);
       else if (!store.user && route.path !== "/login") navigate("/login", true);
       if (isApp()) checkUpdate(true);
+      refreshHttpsBar();
     }
 
     // 安卓壳：系统返回键先交给前端处理，返回 false 表示"可以退出应用了"
@@ -278,7 +295,7 @@ const Root = {
 
     function swipeBlocked(target) {
       if (!target || !target.closest) return true;
-      if (store.confirm || store.announcePopup || store.updateInfo || store.sheet) return true;
+      if (store.confirm || store.announcePopup || store.updateInfo || store.sheet || store.profile) return true;
       return !!target.closest("input, textarea, select, canvas, [data-no-swipe], .tabbar, .scrim, .modal, .sheet");
     }
 
@@ -425,7 +442,8 @@ const Root = {
       drag: Math.round(dragPx), shift: paneShift.value, open: paneOpen.value,
       path: route.path, activeTab: activeTab.value, paged: paged.value, panes: panes.value.length,
       width: hostWidth(), tabs: tabPaths.value,
-      flags: { confirm: !!store.confirm, announce: !!store.announcePopup, update: !!store.updateInfo, sheet: !!store.sheet },
+      flags: { confirm: !!store.confirm, announce: !!store.announcePopup, update: !!store.updateInfo,
+               sheet: !!store.sheet, profile: !!store.profile },
     });
 
     onMounted(() => {
@@ -553,14 +571,24 @@ const Root = {
     }
 
     return { booting, view, isLogin, tabs, activeTab, tabHidden, slideName, store, hostEl, paneEls, paneAnim, dragging, paged, panes, paneStyle,
+             httpsBar, goHttps, dismissHttpsBar,
              resolveConfirm, closeAnnounce, openAnnounce, fmtWhen, tabClick,
-             checkUpdate, runUpdate, dismissUpdate, installedCode, danmaku };
+             checkUpdate, runUpdate, dismissUpdate, installedCode, danmaku,
+             mediaUrl, roleLabelOf, classNameOf, isStaffRole, closeUserProfile };
   },
   template: `
   <div class="app" :class="{ 'tab-hidden': tabHidden }">
     <div v-if="booting" class="boot"><div class="boot-mark"></div></div>
 
     <template v-else>
+      <Transition name="mat">
+        <div v-if="httpsBar" class="https-bar">
+          <Icon n="lock" :size="17" />
+          <span class="grow elide">切到 HTTPS 才能用定位签到</span>
+          <button class="btn btn-sm btn-primary" @click="goHttps()">去开启</button>
+          <button class="https-bar-x" aria-label="知道了" @click="dismissHttpsBar()"><Icon n="close" :size="15" /></button>
+        </div>
+      </Transition>
       <div class="page-host" ref="hostEl" :class="{ 'pager-anim': paneAnim, 'pager-live': dragging }">
         <div v-if="paged" class="pager-track">
           <div v-for="p in panes" :key="p.key" ref="paneEls" :data-offset="p.offset" class="pager-pane"
@@ -609,6 +637,56 @@ const Root = {
             {{ store.confirm.okText || '确定' }}
           </button>
         </div>
+      </div>
+    </Transition>
+
+    <!-- 个人主页：浮窗卡片，下层页面原地不动 -->
+    <Transition name="fade">
+      <div v-if="store.profile" class="scrim scrim-soft" @click="closeUserProfile()"></div>
+    </Transition>
+    <Transition name="mat">
+      <div v-if="store.profile" class="modal glass glass-thick prof-modal">
+        <template v-if="store.profile.loading">
+          <div class="prof-loading"><span class="spin"></span> 加载中…</div>
+        </template>
+        <template v-else-if="store.profile.data">
+          <div class="prof-top">
+            <span class="avatar avatar-lg" :style="store.profile.data.color ? { background: store.profile.data.color } : {}">
+              <img v-if="store.profile.data.avatar" :src="mediaUrl(store.profile.data.avatar)" :alt="store.profile.data.name" />
+              <template v-else>{{ (store.profile.data.name || '?').slice(0, 1) }}</template>
+            </span>
+            <div class="grow">
+              <h3 class="t3 prof-name">{{ store.profile.data.name }}</h3>
+              <p class="cap">{{ roleLabelOf(store.profile.data) }}</p>
+            </div>
+          </div>
+          <p class="prof-bio" :class="{ empty: !store.profile.data.bio }">
+            {{ store.profile.data.bio || '这个人太个性了…' }}
+          </p>
+          <div class="prof-class">
+            <Icon n="shield" :size="15" />
+            <span>{{ store.profile.data.class_name || '无' }}</span>
+          </div>
+          <div class="prof-scores">
+            <div class="prof-score">
+              <b class="num">{{ store.profile.data.points.total }}</b><span>总积分</span>
+            </div>
+            <div class="prof-score">
+              <b class="num">{{ store.profile.data.points.online }}</b><span>联机对战</span>
+            </div>
+            <div class="prof-score">
+              <b class="num">{{ store.profile.data.points.wins }}<i>/</i>{{ store.profile.data.points.losses }}</b><span>胜 / 负</span>
+            </div>
+            <div class="prof-score">
+              <b class="num">{{ store.profile.data.points.solo }}</b><span>单机积分</span>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-block mt5" @click="closeUserProfile()">关闭</button>
+        </template>
+        <template v-else>
+          <p class="sub">这个人好像不见了</p>
+          <button class="btn btn-block mt5" @click="closeUserProfile()">关闭</button>
+        </template>
       </div>
     </Transition>
 

@@ -1,7 +1,8 @@
 import {
   defineView, registerRoute, ref, computed, onMounted, onUnmounted, api, store, navigate,
-  toast, haptic, onWs, confirmDialog, mediaUrl, deviceLocation,
+  toast, haptic, onWs, confirmDialog, mediaUrl, deviceLocation, openUserProfile,
 } from "../ui.js";
+import { isStaff, isSuper } from "../roles.js";
 
 function fmtTime(ts) {
   if (!ts) return "";
@@ -46,9 +47,12 @@ registerRoute("/", defineView("home", {
             <span class="cap">{{ fmtTime(s.sign_at) }}</span>
           </button>
         </div>
+        <div v-if="isSuperUser" class="row gap2 mb2">
+          <span class="chip class-tag" :class="{ public: !session.class_id }">{{ session.class_name || '全体' }}</span>
+        </div>
         <div class="row-between">
           <div class="grow" style="min-width:0">
-            <div class="row gap2">
+            <div class="row gap2 wrap">
               <span class="chip" :class="statusChip.cls"><span class="dot"></span>{{ statusChip.text }}</span>
               <span v-if="session.require_note" class="chip">需备注</span>
             </div>
@@ -97,7 +101,7 @@ registerRoute("/", defineView("home", {
         </Transition>
 
         <div class="row gap2 mt4">
-          <button class="btn btn-sm grow" @click="showDetail">查看名单</button>
+          <button v-if="isStaffUser" class="btn btn-sm grow" @click="showDetail">查看名单</button>
           <button v-if="!mine && session" class="btn btn-sm grow" @click="askLeave">请假</button>
         </div>
       </div>
@@ -200,6 +204,8 @@ registerRoute("/", defineView("home", {
     const note = ref("");
     const now = ref(Date.now());
     const geo = ref({ state: "idle", lat: 0, lng: 0, message: "" });
+    const isStaffUser = computed(() => isStaff(store.user));
+    const isSuperUser = computed(() => isSuper(store.user));
     const myAvatar = computed(() => (store.user && store.user.avatar ? mediaUrl(store.user.avatar) : ""));
     const geoText = computed(() => {
       if (geo.value.state === "ok") return "已定位";
@@ -352,6 +358,7 @@ registerRoute("/", defineView("home", {
 
     return { session, sessions, activeId, pickSession, stats, ranking, recent, loading, busy, note, mine, initial, avatarStyle, myAvatar,
              ringStyle, ringOffset, statusChip, statusOf, fmtTime, greeting, todayText, weekNo, geo, geoText,
-             load, doSign, askLeave, showDetail, navigate, locate, openAnnouncements, mediaUrl, store };
+             load, doSign, askLeave, showDetail, navigate, locate, openAnnouncements, mediaUrl, store,
+             isStaffUser, isSuperUser, openUserProfile };
   },
 }));

@@ -1,7 +1,9 @@
 import {
   defineView, registerRoute, ref, computed, onMounted, onUnmounted, nextTick, watch,
   api, store, toast, haptic, onWs, wsSend, confirmDialog, navigate, route, registerSwipe, mediaUrl,
+  openUserProfile,
 } from "../ui.js";
+import { isManager } from "../roles.js";
 
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
@@ -307,10 +309,11 @@ registerRoute("/chat/topic", defineView("chatTopic", {
 
       <div v-for="msg in messages" :key="msg.id" class="msg" :class="{ mine: msg.mine }"
            @pointerdown="pressStart(msg)" @pointerup="pressEnd" @pointerleave="pressEnd" @pointercancel="pressEnd">
-        <span class="avatar avatar-sm" :style="{ background: colorFor(msg.name) }">
+        <button class="avatar avatar-sm msg-av" :class="{ tap: canOpenProfile(msg) }"
+                :style="{ background: colorFor(msg.name) }" @click="canOpenProfile(msg) && openUserProfile(msg.author_id)">
           <img v-if="showAvatar(msg)" :src="mediaUrl(msg.avatar)" :alt="msg.name" loading="lazy" />
           <template v-else>{{ msg.name.slice(0,1) }}</template>
-        </span>
+        </button>
         <div class="bubble-wrap">
           <div class="meta">
             <b :style="{ color: msg.mine ? 'inherit' : colorFor(msg.name) }">{{ msg.mine ? '我' : msg.name }}</b>
@@ -357,6 +360,10 @@ registerRoute("/chat/topic", defineView("chatTopic", {
   .empty { padding: var(--s7) var(--s5); text-align: center; display: flex; flex-direction: column;
     align-items: center; border-radius: var(--r-lg); }
   .msg { display: flex; gap: var(--s2); align-items: flex-start; max-width: 100%; }
+  /* 头像改成了 button（点开个人主页），把浏览器默认样式抹掉 */
+  .msg-av { padding: 0; border: 0; cursor: default; transition: transform var(--dur-fast) var(--ease-out); }
+  .msg-av.tap { cursor: pointer; }
+  .msg-av.tap:active { transform: scale(0.9); }
   .msg.mine { flex-direction: row-reverse; }
   .bubble-wrap { max-width: 78%; display: flex; flex-direction: column; }
   .msg.mine .bubble-wrap { align-items: flex-end; }
@@ -399,7 +406,13 @@ registerRoute("/chat/topic", defineView("chatTopic", {
     const manage = ref(false);
     const palette = ref(null);
     const listEl = ref(null);
-    const isAdmin = computed(() => store.user && store.user.role === "admin");
+    /* 长按删除言论：总管理员和「管理员(xx班)」权限一样 */
+    const isAdmin = computed(() => isManager(store.user));
+
+    /** 匿名的不给点、自己的不弹卡片，其余都能唤出个人主页 */
+    function canOpenProfile(msg) {
+      return !!(msg && !msg.anon && !msg.mine && msg.author_id);
+    }
     let pressTimer = null;
     let atBottom = true;
     let stops = [];
@@ -504,6 +517,7 @@ registerRoute("/chat/topic", defineView("chatTopic", {
 
     return { topic, messages, draft, anon, hasMore, loading, manage, palette, listEl, isAdmin,
              emojis: EMOJIS, store, fmtTime, colorFor, loadMore, send, react, remove, removeTopic,
-             pressStart, pressEnd, onScroll, back, showAvatar, mediaUrl, setAnonMode };
+             pressStart, pressEnd, onScroll, back, showAvatar, mediaUrl, setAnonMode,
+             canOpenProfile, openUserProfile };
   },
 }));

@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS users (
   salt TEXT NOT NULL,
   avatar TEXT NOT NULL DEFAULT '',
   color TEXT NOT NULL DEFAULT '',
+  class_id INTEGER NOT NULL DEFAULT 0,
+  bio TEXT NOT NULL DEFAULT '',
   banned INTEGER NOT NULL DEFAULT 0,
   muted INTEGER NOT NULL DEFAULT 0,
   note TEXT NOT NULL DEFAULT '',
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS sign_sessions (
   lat REAL NOT NULL DEFAULT 0,
   lng REAL NOT NULL DEFAULT 0,
   radius INTEGER NOT NULL DEFAULT 200,
-  place TEXT NOT NULL DEFAULT ''
+  place TEXT NOT NULL DEFAULT '',
+  class_id INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +85,7 @@ CREATE TABLE IF NOT EXISTS posts (
   content TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'chat',
   reply_to INTEGER NOT NULL DEFAULT 0,
+  class_id INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT 0,
   deleted INTEGER NOT NULL DEFAULT 0,
   deleted_by INTEGER NOT NULL DEFAULT 0
@@ -143,6 +147,13 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   ip TEXT DEFAULT '',
   created_at INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS classes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL DEFAULT ''
@@ -199,6 +210,7 @@ MIGRATIONS = {
         ("lng", "REAL NOT NULL DEFAULT 0"),
         ("radius", "INTEGER NOT NULL DEFAULT 200"),
         ("place", "TEXT NOT NULL DEFAULT ''"),
+        ("class_id", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "records": [
         ("lat", "REAL NOT NULL DEFAULT 0"),
@@ -208,9 +220,12 @@ MIGRATIONS = {
     "posts": [
         ("topic_id", "INTEGER NOT NULL DEFAULT 0"),
         ("image", "TEXT NOT NULL DEFAULT ''"),
+        ("class_id", "INTEGER NOT NULL DEFAULT 0"),
     ],
     "users": [
         ("avatar", "TEXT NOT NULL DEFAULT ''"),
+        ("class_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("bio", "TEXT NOT NULL DEFAULT ''"),
     ],
     "topics": [
         ("pinned", "INTEGER NOT NULL DEFAULT 0"),
@@ -223,6 +238,8 @@ LATE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_posts_topic ON posts(topic_id, id);
 CREATE INDEX IF NOT EXISTS idx_topics_pinned ON topics(pinned DESC, last_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announce_reads ON announce_reads(user_id);
+CREATE INDEX IF NOT EXISTS idx_users_class ON users(class_id);
+CREATE INDEX IF NOT EXISTS idx_sign_class ON sign_sessions(class_id, starts_at DESC);
 """
 
 

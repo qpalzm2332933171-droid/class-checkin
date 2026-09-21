@@ -66,6 +66,7 @@ export const store = reactive({
   ready: false,
   toasts: [],
   sheet: null,
+  profile: null,          // 个人主页浮窗 { uid, data, loading }
   navDir: 1,
   announcements: [],
   unreadAnnounce: 0,
@@ -244,6 +245,29 @@ export function confirmDialog(message, options = {}) {
   });
 }
 
+/* --------------------------------------------------- 个人主页浮窗 */
+/** 打开某人的个人主页卡片；下层页面完全不动。传自己的 id 会被忽略。 */
+export async function openUserProfile(uid) {
+  const id = Number(uid || 0);
+  if (!id) return;
+  if (store.user && store.user.id === id) return;   // 自己不用看自己的卡片
+  store.profile = { uid: id, data: null, loading: true };
+  haptic(6);
+  try {
+    const data = await api("/api/user/" + id + "/profile");
+    if (store.profile && store.profile.uid === id) {
+      store.profile = { uid: id, data: data.profile, loading: false };
+    }
+  } catch (err) {
+    if (store.profile && store.profile.uid === id) store.profile = null;
+    toast(err.message || "打不开这个人的主页", "error");
+  }
+}
+
+export function closeUserProfile() {
+  store.profile = null;
+}
+
 /* ------------------------------------------------------------------ websocket */
 let socket = null;
 let reconnectTimer = null;
@@ -347,6 +371,45 @@ export function isApp() {
   return false;
 }
 
+/* ---------------------------------------------------------------- HTTPS
+   浏览器只在"安全上下文"里给 navigator.geolocation：http:// 的页面直接拿不到，
+   所以网页端要定位签到就只能走 HTTPS。配置在服务端（/api/config 的 https 字段）。 */
+export function httpsInfo() {
+  const cfg = store.settings || {};
+  return cfg.https || { ready: false, origin: "", ca: "" };
+}
+
+/* 当前页面是 http 且服务端开了 HTTPS 时才给地址，其它情况返回空串 */
+export function httpsOrigin() {
+  const info = httpsInfo();
+  if (!info.ready || !info.origin) return "";
+  try {
+    if (location.protocol !== "http:") return "";
+  } catch (err) {
+    return "";
+  }
+  return String(info.origin).replace(/\/+$/, "");
+}
+
+/* 安卓壳有原生定位，不需要也不该跳走 */
+export function needHttps() {
+  if (isApp()) return false;
+  try {
+    if (location.protocol !== "http:") return false;
+  } catch (err) {
+    return false;
+  }
+  if (window.isSecureContext !== false) return false;
+  return !!httpsOrigin();
+}
+
+export function goHttps() {
+  const origin = httpsOrigin();
+  if (!origin) return false;
+  location.href = origin + location.pathname + location.search + location.hash;
+  return true;
+}
+
 /* ------------------------------------------------------- 设备定位
    优先用安卓壳的原生定位（HTTP 页面浏览器会禁用 navigator.geolocation），
    退回到浏览器定位（https / localhost 可用）。 */
@@ -387,7 +450,9 @@ export function deviceLocation(options) {
       return;
     }
     if (window.isSecureContext === false) {
-      reject(new Error("网页端定位需要 HTTPS，请用安卓客户端尝试"));
+      reject(new Error(httpsOrigin()
+        ? "浏览器只在 HTTPS 下给定位，点页面顶部的「去开启」切到 HTTPS 再试"
+        : "网页端定位需要 HTTPS，请用安卓客户端尝试"));
       return;
     }
     navigator.geolocation.getCurrentPosition(
