@@ -37,3 +37,6 @@ Thumbs.db
 *.tgz
 _srv.out
 _ep*/
+
+# 一次性排查脚本（_probe-*.mjs / _ph.mjs 这类），不要进仓库
+tests/browser/_*.mjs
