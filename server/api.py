@@ -1461,7 +1461,7 @@ async def admin_overview(req):
     def count(sql, args=()):
         return db.query_one(sql, tuple(args))["c"]
 
-    live = [c for c in ws.CONNS if not c.closed]
+    live = ws.live_conns()
     if scope != "all":
         keep = cid if scope == "one" else 0
         live = [c for c in live if class_id_of(c.user) == keep]

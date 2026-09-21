@@ -6,8 +6,15 @@
 const PORT = Number((process.env.CDP_PORTS || '9336').split(',')[0]);
 const BASE = process.env.CHECKIN_BASE || 'http://127.0.0.1:8081';
 
-const ROLES = (process.env.CC_ROLES || 'admin:admin:HXjZwr8Tnc,cw01:cw01:cw01pass,gt01:gt01:gt01pass,ww01:ww01:wwpass1')
-  .split(',').map((x) => { const [who, u, p] = x.split(':'); return { who, u, p }; });
+/* 口令一律从 CC_ROLES 传进来，别把真口令写进仓库（这是公开仓库）。
+   例：CC_ROLES='admin:admin:口令,cw01:cw01:口令,gt01:gt01:口令,ww01:ww01:口令' */
+const ROLES = (process.env.CC_ROLES || '')
+  .split(',').filter(Boolean)
+  .map((x) => { const [who, u, p] = x.split(':'); return { who, u, p }; });
+if (!ROLES.length) {
+  console.error('需要设置 CC_ROLES，形如 admin:admin:口令,ww01:ww01:口令');
+  process.exit(2);
+}
 const ROUTES = (process.env.CC_ROUTES ||
   '/,/chat,/games,/games/2048,/games/mine,/games/gomoku,/games/xiangqi,/games/me,/records,/changelog,/admin,/login')
   .split(',');

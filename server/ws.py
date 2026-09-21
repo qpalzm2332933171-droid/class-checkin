@@ -73,6 +73,7 @@ class Conn:
         self.ip = ip
         self.device = device
         self.closed = False
+        self.passive = False       # 「只看不收」的静默连接（安卓后台值守）：不计在线人数
         self.last_seen = now()
         self.rooms = set()
         self.detached_at = 0        # 断线时刻（0 = 在线）。房间宽限期内保留座位
@@ -130,18 +131,24 @@ async def broadcast(obj, exclude=None, room_only=None):
         await conn.send(obj)
 
 
+def live_conns():
+    """真正代表"人在线"的连接：安卓后台值守那条被动连接不算。"""
+    return [c for c in CONNS if not c.closed and not c.passive]
+
+
+def online_count():
+    return len({c.uid for c in live_conns()})
+
+
 def online_users():
     seen = {}
-    for conn in CONNS:
-        if conn.closed:
-            continue
+    for conn in live_conns():
         seen[conn.uid] = user_view(conn.user)
     return list(seen.values())
 
 
 async def push_presence():
-    await broadcast({"t": "presence", "count": len({c.uid for c in CONNS if not c.closed}),
-                     "users": online_users()})
+    await broadcast({"t": "presence", "count": online_count(), "users": online_users()})
 
 
 async def handle_chat_send(conn, msg):
@@ -219,7 +226,7 @@ async def handle_message(conn, msg):
             await broadcast({"t": "chat.reactions", "post_id": post_id, "reactions": rows})
         return
     if kind == "presence.get":
-        await conn.send({"t": "presence", "count": len({c.uid for c in CONNS if not c.closed}),
+        await conn.send({"t": "presence", "count": online_count(),
                          "users": online_users()})
         return
     if kind.startswith("game."):
@@ -249,6 +256,9 @@ async def run_connection(req, reader, writer):
     await writer.drain()
 
     conn = Conn(user, reader, writer, req.client_ip, req.q("device", "web"))
+    # watch=1：安卓客户端的后台值守长连接。它要能收到 broadcast（新签到推送），
+    # 但不应把用户算成"在线"，也不该触发 presence 广播。
+    conn.passive = req.q("watch") in ("1", "true")
     CONNS.add(conn)
     BY_USER.setdefault(conn.uid, set()).add(conn)
     db.execute("UPDATE users SET last_login = ? WHERE id = ?", (now(), conn.uid))
@@ -258,10 +268,11 @@ async def run_connection(req, reader, writer):
             "user": user_view(user),
             "alias": anon_alias(conn.uid),
             "settings": db.get_settings(),
-            "online": len({c.uid for c in CONNS if not c.closed}),
+            "online": online_count(),
             "server_time": now(),
         })
-        await push_presence()
+        if not conn.passive:
+            await push_presence()
         while not conn.closed:
             opcode, data = await read_frame(reader)
             if opcode == 0x8:
@@ -299,7 +310,8 @@ async def run_connection(req, reader, writer):
             await games.on_disconnect(conn)
         except Exception:  # noqa: BLE001
             pass
-        await push_presence()
+        if not conn.passive:
+            await push_presence()
         try:
             writer.close()
         except Exception:  # noqa: BLE001
@@ -321,7 +333,7 @@ async def heartbeat():
                     await conn.writer.drain()
             except Exception:  # noqa: BLE001
                 conn.closed = True
-        if CONNS:
+        if live_conns():
             await push_presence()
 
 

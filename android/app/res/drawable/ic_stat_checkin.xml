@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标：必须是"白色剪影 + 透明背景"，
+     否则 Android 12+ 会把它渲染成一个灰色方块，和微信那种清爽的通知没法比。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.55,17.6l-4.9,-4.9 1.6,-1.6 3.3,3.3 8.2,-8.2 1.6,1.6z" />
+</vector>

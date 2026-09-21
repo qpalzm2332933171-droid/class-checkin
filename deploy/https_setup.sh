@@ -2,8 +2,8 @@
 # 给 class-checkin 打开 HTTPS：自己签一套 CA + 服务器证书，再加一个 HTTPS 监听端口。
 #
 #   bash https_setup.sh <对外地址> <对外HTTPS端口> [内部HTTPS端口] [额外SAN(逗号分隔)]
-# 例：bash https_setup.sh 43.227.71.8 20319 18101 ""              # 单个 IP
-#     bash https_setup.sh checkin.example.com 20319 18101 "IP:43.227.71.8"
+# 例：bash https_setup.sh your.server.ip 20319 18101 ""              # 单个 IP
+#     bash https_setup.sh checkin.example.com 20319 18101 "IP:your.server.ip"
 #
 # 为什么要 HTTPS：浏览器只在"安全上下文"里给 navigator.geolocation，
 # 纯 http 页面拿不到定位，网页端就没法定位签到。

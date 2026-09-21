@@ -57,6 +57,8 @@ public class MainActivity extends Activity {
 
     private static final int REQ_LOCATION = 101;
     private static final int REQ_NOTIFY = 103;
+    public static final String EXTRA_SIGN_ID = "sign_id";
+    private static final String KEY_ASKED_BATTERY = "asked_battery_opt";
 
     private WebView webView;
     private final AtomicBoolean updating = new AtomicBoolean(false);
@@ -161,6 +163,67 @@ public class MainActivity extends Activity {
             try {
                 requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, REQ_NOTIFY);
             } catch (Exception ignored) { }
+        }
+        askBatteryWhitelist();
+    }
+
+    /**
+     * 让用户把 app 加进"电池优化白名单"。
+     * 不加的话，手机息屏进 Doze 之后长连接会被掐断，通知就做不到"像微信一样实时"。
+     * 只在第一次问一遍，之后不再骚扰。
+     */
+    private void askBatteryWhitelist() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                return;
+            }
+            if (prefs().getBoolean(KEY_ASKED_BATTERY, false)) {
+                return;
+            }
+            prefs().edit().putBoolean(KEY_ASKED_BATTERY, true).apply();
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("让签到通知更及时")
+                    .setMessage("允许「班级签到」在后台一直运行，新签到一发布就能像微信一样立刻收到提醒。\n\n"
+                            + "接下来系统会问一次「是否允许应用在后台运行」，点「允许」即可。")
+                    .setCancelable(true)
+                    .setPositiveButton("去设置", new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            try {
+                                Intent intent = new Intent(
+                                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                                intent.setData(Uri.parse("package:" + getPackageName()));
+                                startActivity(intent);
+                            } catch (Exception ignored) { }
+                        }
+                    })
+                    .setNegativeButton("以后再说", null)
+                    .show();
+        } catch (Exception ignored) { }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent == null || webView == null) {
+            return;
+        }
+        if (intent.getIntExtra(EXTRA_SIGN_ID, 0) > 0) {
+            // 点通知进来：直接跳到签到页
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        webView.evaluateJavascript(
+                                "try{location.hash='#/'}catch(e){}", null);
+                    } catch (Exception ignored) { }
+                }
+            });
         }
     }
 
