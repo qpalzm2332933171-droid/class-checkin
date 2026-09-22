@@ -48,6 +48,9 @@ registerRoute("/me", defineView("profile", {
 
         <label class="label mt4">昵称</label>
         <input class="field" v-model="form.name" maxlength="20" placeholder="显示给同学的名字" />
+        <label class="label mt4">个性签名</label>
+        <input class="field" v-model="form.bio" maxlength="60" placeholder="写点什么，别人点开你的主页就能看到" />
+        <p class="cap mt2">留空的话，别人看到的是「这个人太个性了…」</p>
         <label class="label mt4">头像颜色（未设置头像时生效）</label>
         <div class="pf-swatches">
           <button v-for="c in colors" :key="c" class="pf-sw" :class="{ on: form.color === c }"
@@ -127,7 +130,7 @@ registerRoute("/me", defineView("profile", {
       </button>
     </div>
 
-    <p class="cap center pf-foot">© {{ year }} 我们的班级 · 一起签到，一起玩</p>
+    <p class="cap center pf-foot">Copyright By 人工智能启明实验2501班 版权所有 侵权必究</p>
   </div>`,
   style: `
   .pf-hero { padding: calc(var(--safe-t) + var(--s5)) var(--s5) var(--s5); border-radius: 0 0 var(--r-xl) var(--r-xl); }
@@ -155,7 +158,7 @@ registerRoute("/me", defineView("profile", {
   .pf-foot { padding: var(--s6) 0 calc(var(--safe-b) + 96px); opacity: .55; }
   `,
   setup() {
-    const form = ref({ name: "", color: "" });
+    const form = ref({ name: "", color: "", bio: "" });
     const pwd = ref({ old: "", next: "" });
     const editOpen = ref(false);
     const pwdOpen = ref(false);
@@ -229,8 +232,9 @@ registerRoute("/me", defineView("profile", {
       if (saving.value) return;
       saving.value = true;
       try {
-        await api("/api/me", { method: "POST", body: { name: form.value.name, color: form.value.color } });
-        store.user = { ...store.user, name: form.value.name, color: form.value.color };
+        const bio = (form.value.bio || "").trim();
+        await api("/api/me", { method: "POST", body: { name: form.value.name, color: form.value.color, bio: bio } });
+        store.user = { ...store.user, name: form.value.name, color: form.value.color, bio: bio };
         toast("已保存", "success");
         haptic(12);
         editOpen.value = false;
@@ -357,7 +361,7 @@ registerRoute("/me", defineView("profile", {
 
     onMounted(() => {
       /* 根路径/我的页不注册滑动处理器，交给全局分页器（否则会吞掉左右滑动） */
-      form.value = { name: store.user?.name || "", color: store.user?.color || COLORS[0] };
+      form.value = { name: store.user?.name || "", color: store.user?.color || COLORS[0], bio: store.user?.bio || "" };
       const base = Number(store.settings.version_h5 || 0);
       bundle.value = base;
       if (isApp() && window.ClassCheckIn) bundle.value = Number(window.ClassCheckIn.versionCode || base);

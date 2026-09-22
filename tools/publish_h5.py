@@ -28,6 +28,22 @@ def call(base, path, method="GET", body=None, token=None, raw=None, query=""):
         return json.loads(resp.read().decode())
 
 
+# 只在服务器上提供、不打进热更新包的目录（相对 web/ 的 posix 前缀）。
+#
+# 为什么：web/games/danmaku/ 是 iframe 插件式接入的游戏本体，宿主里是
+#   gameSrc = mediaUrl("/games/danmaku/index.html")
+# 而 mediaUrl() = serverBase() + path —— 无论 H5 还是安卓壳（宿主页走 file://），
+# iframe 一律指向服务器，包内那份从不加载。Phaser 版三件套一共 17.6 MB
+#（index.html 9.9 MB 内嵌 BGM + phaser.min.js 1.2 MB + bgm.mp3 7.4 MB），
+# 打进包里只会让 25 个人白白多下载 18 MB。APK 的 android/build.ps1 同样跳过它。
+PACKAGE_EXCLUDE = ("games/danmaku/",)
+
+
+def _packaged(rel):
+    """相对 web/ 的 posix 路径是否需要进包。"""
+    return not any(rel.startswith(prefix) for prefix in PACKAGE_EXCLUDE)
+
+
 def build_zip():
     """zip 根目录直接放 index.html（安卓壳解包后要求 <dir>/index.html）。"""
     buffer = io.BytesIO()
@@ -37,6 +53,8 @@ def build_zip():
             for name in files:
                 full = os.path.join(folder, name)
                 rel = os.path.relpath(full, WEB).replace("\\", "/")
+                if not _packaged(rel):
+                    continue
                 zf.write(full, rel)
                 count += 1
     return buffer.getvalue(), count

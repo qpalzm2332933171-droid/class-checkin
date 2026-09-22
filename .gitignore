@@ -13,6 +13,9 @@ docs/账号表.csv
 tests/browser/accounts.json
 
 # 构建产物
+# android/app/assets/h5 只是 web/ 的副本，由 android/build.ps1 在每次构建时重新生成。
+# 入库只会让每次改前端都多出一大坨重复 diff，还容易漏文件变成"半份快照"。
+android/app/assets/h5/
 android/build/
 android/dist/
 android/app/build/
@@ -37,3 +40,6 @@ Thumbs.db
 *.tgz
 _srv.out
 _ep*/
+
+# 一次性排查脚本（_probe-*.mjs / _ph.mjs 这类），不要进仓库
+tests/browser/_*.mjs

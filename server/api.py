@@ -101,6 +101,146 @@ def avatar_dir():
     return path
 
 
+# ------------------------------------------------------------------ 班级（class）
+# 角色：admin(总管理员，管所有班) / class_admin(管理员(xx班)) / committee(资委，本班) /
+#       study(学委，本班) / member(普通成员)。
+# 除了 admin，其他人能看到的签到、成员、记录全部被钉死在自己班里 —— 收口就靠下面三个函数。
+CLASS_ROLES = ("admin", "class_admin", "committee", "study")
+
+
+def is_super(user):
+    return (user or {}).get("role") == "admin"
+
+
+def is_staff(user):
+    """有没有管理台资格（总管理员/班级管理员/资委/学委）。"""
+    return bool(user and user.get("role") in CLASS_ROLES)
+
+
+def is_manager(user):
+    """总管理员或班级管理员 —— 能进「成员管理」这一档。"""
+    return bool(user and user.get("role") in ("admin", "class_admin"))
+
+
+def class_id_of(user):
+    return int((user or {}).get("class_id") or 0)
+
+
+def class_list():
+    return db.query("SELECT * FROM classes ORDER BY id ASC")
+
+
+def class_name_of(cid):
+    cid = int(cid or 0)
+    if not cid:
+        return ""
+    row = db.query_one("SELECT name FROM classes WHERE id = ?", (cid,))
+    return row["name"] if row else ""
+
+
+def class_scope(req, param="class"):
+    """数据可见范围 -> (scope, cid)。
+
+    ("all", 0)   全部（只有总管理员拿得到）
+    ("one", N)   只看第 N 班
+    ("none", 0)  只看「未指定班级」的
+    总管理员用 ?class=all|0|N 来选；其他人一律被钉在自己班里，传什么参数都没用。"""
+    if is_super(req.user):
+        raw = (req.q(param, "all") or "all").strip()
+        if raw in ("", "all"):
+            return ("all", 0)
+        try:
+            cid = int(raw)
+        except ValueError:
+            return ("all", 0)
+        return ("none", 0) if cid <= 0 else ("one", cid)
+    cid = class_id_of(req.user)
+    return ("one", cid) if cid else ("none", 0)
+
+
+def scope_where(scope, cid, column="class_id", alias=""):
+    """class_scope() 的结果 -> SQL 片段（以 AND 开头，可直接拼在 WHERE 后面）。"""
+    col = "%s%s" % (alias, column)
+    if scope == "all":
+        return "", []
+    if scope == "none":
+        return " AND %s = 0" % col, []
+    return " AND %s = ?" % col, [cid]
+
+
+def can_touch_user(actor, target):
+    """actor 有没有资格管理 target 这个账号。
+
+    比的是"同一个班"。class_id = 0 表示「未指定班级」，它也是一个正常的桶：
+    还没分班的资委/学委要能照旧管没分班的同学，否则一分班之前所有老账号
+    （class_id 全是 0）就谁都动不了了。跨班永远是 False。"""
+    if is_super(actor):
+        return True
+    if (actor or {}).get("role") not in ("class_admin", "committee", "study"):
+        return False
+    return class_id_of(actor) == class_id_of(target)
+
+
+def staff_can_see_class(user, cid):
+    """这条数据（班级 cid）staff 能不能碰。跟 can_touch_user 一个口径：同班才算。"""
+    if is_super(user):
+        return True
+    return class_id_of(user) == int(cid or 0)
+
+
+def class_member_count(cid):
+    """一个场次的「应到人数」：公共场次(0)算全体，班级场次只算本班。"""
+    cid = int(cid or 0)
+    if not cid:
+        return db.query_one("SELECT COUNT(*) AS c FROM users WHERE banned = 0")["c"]
+    return db.query_one("SELECT COUNT(*) AS c FROM users WHERE banned = 0 AND class_id = ?", (cid,))["c"]
+
+
+def session_scope_where(scope, cid, alias=""):
+    """签到场次可见性：班级场次只有本班看得见，class_id=0 的公共场次所有人都看得见。"""
+    col = "%sclass_id" % alias
+    if scope == "all":
+        return "", []
+    if scope == "none":
+        return " AND %s = 0" % col, []
+    return " AND (%s = ? OR %s = 0)" % (col, col), [cid]
+
+
+def scope_members(scope, cid):
+    """按 scope 取用户行，用于「本班名单」这类列表。"""
+    where, args = scope_where(scope, cid)
+    return db.query("SELECT * FROM users WHERE 1 = 1%s ORDER BY role DESC, id ASC" % where, tuple(args))
+
+
+def https_info(req):
+    """给前端一句准话：有没有 HTTPS、地址是啥。
+    外面那层 NAT 转发的外部端口不一定等于内部端口，所以优先用配置里的
+    https_origin（设置项 > 环境变量），最后才按同主机+内部端口猜。"""
+    import app as app_mod
+    port = app_mod.TLS_PORT
+    ready = bool(port and app_mod.TLS_CERT and app_mod.TLS_KEY
+                 and os.path.isfile(app_mod.TLS_CERT) and os.path.isfile(app_mod.TLS_KEY))
+    origin = (db.setting("https_origin") or os.environ.get("CHECKIN_HTTPS_ORIGIN") or "").strip().rstrip("/")
+    if not origin and ready:
+        host = (req.header("host") or "").split(":")[0] or "localhost"
+        if host not in ("localhost", "127.0.0.1"):
+            origin = "https://%s:%d" % (host, port)
+    return {
+        "ready": bool(ready and origin),
+        "origin": origin,
+        "port": port if ready else 0,
+        "ca": "/checkin-ca.crt" if ready and app_mod.TLS_CA and os.path.isfile(app_mod.TLS_CA) else "",
+    }
+
+
+def can_see_session(user, row):
+    """这个用户能不能看到/操作这个签到场次。"""
+    if is_super(user):
+        return True
+    cid = int(row.get("class_id") or 0)
+    return cid == 0 or cid == class_id_of(user)
+
+
 # ------------------------------------------------------------------ public
 @route("GET", "/api/config", auth_required=False)
 async def get_config(req):
@@ -120,6 +260,7 @@ async def get_config(req):
         "early_minutes": int(settings.get("early_minutes") or DEFAULT_EARLY_MINUTES),
         "topics_enabled": settings.get("topics_enabled", "1") == "1",
         "announce_popup": settings.get("announce_popup", "1") == "1",
+        "https": https_info(req),
     })
 
 
@@ -242,6 +383,9 @@ async def me(req):
                "alias": ws.anon_alias(req.user["id"])})
 
 
+BIO_MAX = 60
+
+
 @route("POST", "/api/me")
 async def update_me(req):
     data = req.json()
@@ -251,7 +395,112 @@ async def update_me(req):
         db.execute("UPDATE users SET name = ? WHERE id = ?", (name, req.user["id"]))
     if color is not None:
         db.execute("UPDATE users SET color = ? WHERE id = ?", (color, req.user["id"]))
+    if "bio" in data:
+        db.execute("UPDATE users SET bio = ? WHERE id = ?",
+                   ((data.get("bio") or "").strip()[:BIO_MAX], req.user["id"]))
+    db.audit(req.user["id"], "user.profile", "更新了个人资料", req.client_ip)
     return ok({"updated": True})
+
+
+@route("GET", "/api/user/{uid}/profile")
+async def user_profile(req, uid):
+    """个人主页浮窗的数据：头像/昵称/签名/班级/总积分/联机分数(胜-负)/单机积分。"""
+    try:
+        target_id = int(uid)
+    except (TypeError, ValueError):
+        raise HttpError(400, "用户编号不合法")
+    target = db.query_one("SELECT * FROM users WHERE id = ?", (target_id,))
+    if not target or target.get("banned"):
+        raise HttpError(404, "用户不存在")
+    viewer_is_staff = is_staff(req.user)
+    mine = target_id == req.user["id"]
+    return ok({"profile": {
+        "id": target_id,
+        "name": target["name"],
+        "username": target["username"] if (viewer_is_staff or mine) else "",
+        "avatar": target.get("avatar") or "",
+        "color": target.get("color") or "",
+        "role": target["role"],
+        "bio": target.get("bio") or "",
+        "class_id": int(target.get("class_id") or 0),
+        "class_name": auth.class_name_of(target.get("class_id")),
+        "created_at": target.get("created_at") or 0,
+        "muted": target.get("muted") or 0,
+        "online": mine,
+        "points": db.get_points(target_id),
+    }})
+
+
+# ------------------------------------------------------------------ 班级管理
+@route("GET", "/api/classes")
+async def classes_list(req):
+    if not is_staff(req.user):
+        raise HttpError(403, "没有权限查看班级列表")
+    out = []
+    for row in class_list():
+        cid = int(row["id"])
+        out.append({
+            "id": cid, "name": row["name"], "note": row.get("note") or "",
+            "created_at": row.get("created_at") or 0,
+            "members": db.query_one("SELECT COUNT(*) AS c FROM users WHERE class_id = ?", (cid,))["c"],
+            "sessions": db.query_one("SELECT COUNT(*) AS c FROM sign_sessions WHERE class_id = ?", (cid,))["c"],
+        })
+    return ok({"classes": out, "mine": class_id_of(req.user), "is_super": is_super(req.user)})
+
+
+@route("POST", "/api/classes", admin=True)
+async def class_create(req):
+    data = req.json()
+    name = (data.get("name") or "").strip()[:30]
+    if not name:
+        raise HttpError(400, "班级名称不能为空")
+    if db.query_one("SELECT id FROM classes WHERE name = ?", (name,)):
+        raise HttpError(409, "这个班级已经存在了")
+    cid = db.execute("INSERT INTO classes(name, note, created_at, created_by) VALUES(?,?,?,?)",
+                     (name, (data.get("note") or "").strip()[:60], now(), req.user["id"]))
+    db.audit(req.user["id"], "admin.class.create", name, req.client_ip)
+    return ok({"id": cid, "name": name})
+
+
+@route("PATCH", "/api/classes/{cid}", admin=True)
+async def class_update(req, cid):
+    class_id = int(cid)
+    row = db.query_one("SELECT * FROM classes WHERE id = ?", (class_id,))
+    if not row:
+        raise HttpError(404, "班级不存在")
+    data = req.json()
+    fields, args = [], []
+    if "name" in data:
+        name = (data.get("name") or "").strip()[:30]
+        if not name:
+            raise HttpError(400, "班级名称不能为空")
+        if db.query_one("SELECT id FROM classes WHERE name = ? AND id <> ?", (name, class_id)):
+            raise HttpError(409, "已存在同名班级")
+        fields.append("name = ?")
+        args.append(name)
+    if "note" in data:
+        fields.append("note = ?")
+        args.append((data.get("note") or "").strip()[:60])
+    if fields:
+        args.append(class_id)
+        db.execute("UPDATE classes SET %s WHERE id = ?" % ", ".join(fields), tuple(args))
+        db.audit(req.user["id"], "admin.class.update", "%d %s" % (class_id, dumps(data).decode()), req.client_ip)
+    return ok({"updated": True})
+
+
+@route("DELETE", "/api/classes/{cid}", admin=True)
+async def class_delete(req, cid):
+    class_id = int(cid)
+    row = db.query_one("SELECT * FROM classes WHERE id = ?", (class_id,))
+    if not row:
+        raise HttpError(404, "班级不存在")
+    moved = db.query_one("SELECT COUNT(*) AS c FROM users WHERE class_id = ?", (class_id,))["c"]
+    db.execute("UPDATE users SET class_id = 0 WHERE class_id = ?", (class_id,))
+    db.execute("UPDATE sign_sessions SET class_id = 0 WHERE class_id = ?", (class_id,))
+    db.execute("UPDATE posts SET class_id = 0 WHERE class_id = ?", (class_id,))
+    db.execute("DELETE FROM classes WHERE id = ?", (class_id,))
+    db.audit(req.user["id"], "admin.class.delete", "%s（%d 名成员转为未指定班级）" % (row["name"], moved), req.client_ip)
+    return ok({"deleted": True, "moved": moved})
 
 
 @route("POST", "/api/me/password")
@@ -337,7 +586,7 @@ async def logout(req):
 
 # ------------------------------------------------------------------ check-in
 def session_view(row, user_id=None):
-    total = db.query_one("SELECT COUNT(*) AS c FROM users WHERE banned = 0")["c"]
+    total = class_member_count(row.get("class_id"))
     present = db.query_one(
         "SELECT COUNT(*) AS c FROM records WHERE session_id = ? AND status IN ('present','late')", (row["id"],))["c"]
     mine = None
@@ -351,6 +600,8 @@ def session_view(row, user_id=None):
     opens_at = (sign_at - early * 60) if row.get("sign_at") else 0
     return {
         "id": row["id"], "title": row["title"], "status": row["status"],
+        "class_id": int(row.get("class_id") or 0),
+        "class_name": auth.class_name_of(row.get("class_id")) or "全体",
         "starts_at": row["starts_at"], "ends_at": ends_at, "late_after": row["late_after"],
         "sign_at": sign_at, "opens_at": opens_at,
         "grace_minutes": row.get("grace_minutes") or 0,
@@ -367,7 +618,10 @@ def session_view(row, user_id=None):
 @route("GET", "/api/sign/sessions")
 async def sign_sessions(req):
     limit = min(req.int_param("limit", 20), 100)
-    rows = db.query("SELECT * FROM sign_sessions ORDER BY starts_at DESC LIMIT ?", (limit,))
+    scope, cid = class_scope(req)
+    where, args = session_scope_where(scope, cid)
+    rows = db.query("SELECT * FROM sign_sessions WHERE 1 = 1%s ORDER BY starts_at DESC LIMIT ?" % where,
+                    tuple(args + [limit]))
     return ok({"sessions": [session_view(r, req.user["id"]) for r in rows]})
 
 
@@ -375,11 +629,14 @@ async def sign_sessions(req):
 async def sign_active(req):
     """同时可以开多个签到，这里把它们全部返回，前端用标签切换查看。"""
     ts = now()
+    scope, cid = class_scope(req)
+    where, args = session_scope_where(scope, cid)
     rows = db.query(
-        "SELECT * FROM sign_sessions WHERE status = 'open' AND (ends_at = 0 OR ends_at > ?) "
-        "ORDER BY starts_at DESC, id DESC", (ts,))
+        "SELECT * FROM sign_sessions WHERE status = 'open' AND (ends_at = 0 OR ends_at > ?)%s "
+        "ORDER BY starts_at DESC, id DESC" % where, tuple([ts] + args))
     if not rows:
-        row = db.query_one("SELECT * FROM sign_sessions ORDER BY starts_at DESC, id DESC LIMIT 1")
+        row = db.query_one("SELECT * FROM sign_sessions WHERE 1 = 1%s ORDER BY starts_at DESC, id DESC LIMIT 1" % where,
+                           tuple(args))
         rows = [row] if row else []
     if not rows:
         return ok({"session": None, "sessions": []})
@@ -396,6 +653,8 @@ async def sign_in(req):
     row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (sid,))
     if not row:
         raise HttpError(404, "签到场次不存在")
+    if not can_see_session(req.user, row):
+        raise HttpError(403, "这是别的班的签到，你签不了")
     if row["status"] != "open":
         raise HttpError(400, "该场次已结束")
     ts = now()
@@ -454,6 +713,8 @@ async def sign_leave(req):
     row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (sid,))
     if not row:
         raise HttpError(404, "签到场次不存在")
+    if not can_see_session(req.user, row):
+        raise HttpError(403, "这是别的班的签到，你没法请假")
     if not row["allow_leave"]:
         raise HttpError(400, "该场次不允许请假")
     note = (data.get("note") or "").strip()[:200] or "请假"
@@ -486,12 +747,16 @@ async def sign_session_detail(req, sid):
     row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (int(sid),))
     if not row:
         raise HttpError(404, "场次不存在")
+    if not can_see_session(req.user, row):
+        raise HttpError(403, "这是别的班的签到")
     data = session_view(row, req.user["id"])
-    if req.user.get("role") == "admin":
+    if is_staff(req.user):
+        scope, cid = class_scope(req)
+        member_where, member_args = scope_where(scope, cid, "class_id", "u.")
         data["code"] = row["code"]
         records = db.query(
             "SELECT r.*, u.name, u.username FROM records r JOIN users u ON u.id = r.user_id "
-            "WHERE r.session_id = ? ORDER BY r.created_at ASC", (row["id"],))
+            "WHERE r.session_id = ?%s ORDER BY r.created_at ASC" % member_where, tuple([row["id"]] + member_args))
         data["records"] = [{
             "id": r["id"], "user_id": r["user_id"], "name": r["name"], "username": r["username"],
             "status": r["status"], "note": r["note"], "created_at": r["created_at"],
@@ -499,15 +764,19 @@ async def sign_session_detail(req, sid):
         } for r in records]
         done = {r["user_id"] for r in records if r["status"] in ("present", "late")}
         data["missing"] = [{"id": u["id"], "name": u["name"], "username": u["username"]}
-                           for u in member_list() if u["id"] not in done and not u["banned"]]
+                           for u in scope_members(scope, cid) if u["id"] not in done and not u["banned"]]
     return ok({"session": data})
 
 
 @route("GET", "/api/stats/class")
 async def class_stats(req):
-    users = member_list()
-    sessions = db.query("SELECT * FROM sign_sessions ORDER BY starts_at DESC LIMIT 50")
+    scope, cid = class_scope(req)
+    users = scope_members(scope, cid)
+    sess_where, sess_args = session_scope_where(scope, cid)
+    sessions = db.query("SELECT * FROM sign_sessions WHERE 1 = 1%s ORDER BY starts_at DESC LIMIT 50" % sess_where,
+                        tuple(sess_args))
     total = len(sessions) or 1
+    session_ids = [s["id"] for s in sessions]
     rows = []
     for user in users:
         got = db.query_one(
@@ -768,9 +1037,12 @@ def fetch_messages(user, topic_id, limit=60, before=0):
             "content": r["content"], "created_at": r["created_at"], "reply_to": r["reply_to"],
             "mine": r["author_id"] == user["id"], "reactions": marks.get(r["id"], []),
         }
+        # 非匿名发言才带上作者 id —— 讨论区点头像要看个人主页，匿名的一律不给
         if is_admin:
             item["author_id"] = r["author_id"]
             item["author_name"] = r["real_name"]
+        elif not r["anon"]:
+            item["author_id"] = r["author_id"]
         out.append(item)
     return out, len(rows) == limit
 
@@ -835,7 +1107,7 @@ async def chat_topic_update(req, tid):
     row = db.query_one("SELECT * FROM topics WHERE id = ?", (topic_id,))
     if not row:
         raise HttpError(404, "话题不存在")
-    if row["author_id"] != req.user["id"] and req.user.get("role") != "admin":
+    if row["author_id"] != req.user["id"] and not is_manager(req.user):
         raise HttpError(403, "只能修改自己创建的话题")
     data = req.json()
     fields, args = [], []
@@ -866,7 +1138,7 @@ async def chat_topic_delete(req, tid):
     row = db.query_one("SELECT * FROM topics WHERE id = ?", (topic_id,))
     if not row:
         raise HttpError(404, "话题不存在")
-    if row["author_id"] != req.user["id"] and req.user.get("role") != "admin":
+    if row["author_id"] != req.user["id"] and not is_manager(req.user):
         raise HttpError(403, "只能删除自己创建的话题")
     db.execute("UPDATE topics SET deleted = 1, deleted_by = ? WHERE id = ?", (req.user["id"], topic_id))
     db.audit(req.user["id"], "chat.topic.delete", "#%d" % topic_id, req.client_ip)
@@ -939,9 +1211,11 @@ async def chat_search(req):
 
 @route("GET", "/api/announcements")
 async def announcements(req):
+    ann_scope, ann_cid = class_scope(req)
+    ann_where, ann_args = session_scope_where(ann_scope, ann_cid, "p.")
     rows = db.query(
         "SELECT p.*, u.name AS author_name, u.avatar FROM posts p LEFT JOIN users u ON u.id = p.author_id "
-        "WHERE p.kind = 'announce' AND p.deleted = 0 ORDER BY p.id DESC LIMIT 30")
+        "WHERE p.kind = 'announce' AND p.deleted = 0%s ORDER BY p.id DESC LIMIT 30" % ann_where, tuple(ann_args))
     read_ids = {r["post_id"] for r in db.query(
         "SELECT post_id FROM announce_reads WHERE user_id = ?", (req.user["id"],))}
     items = [{
@@ -1113,38 +1387,133 @@ def server_stats():
     }
 
 
+_NET_PREV = {"t": 0.0, "rx": 0, "tx": 0}
+_NET_LAST = {"rx": 0.0, "tx": 0.0}
+_NET_PEAK = {"rx": 0.0, "tx": 0.0}
+
+
+def _read_net_dev():
+    """累计收发字节数（跳过 lo 回环）。非 Linux 或读不到时返回 None。"""
+    if not os.path.exists("/proc/net/dev"):
+        return None
+    try:
+        with open("/proc/net/dev") as fh:
+            lines = fh.readlines()[2:]
+    except OSError:
+        return None
+    rx = tx = 0
+    for line in lines:
+        if ":" not in line:
+            continue
+        name, rest = line.split(":", 1)
+        if name.strip() == "lo":
+            continue
+        parts = rest.split()
+        if len(parts) < 9:
+            continue
+        rx += int(parts[0])
+        tx += int(parts[8])
+    return rx, tx
+
+
+def net_stats():
+    """实时带宽占用：两次采样的差值 / 时间差。同一秒内重复调用返回上次的结果。"""
+    cap = float(db.setting("net_cap_mbps", "10") or 10) or 10.0
+    sample = _read_net_dev()
+    if sample is None:  # Windows 上开发时没有 /proc
+        return {"net_unsupported": True, "net_cap_mbps": cap,
+                "net_rx_bps": 0.0, "net_tx_bps": 0.0, "net_total_bps": 0.0,
+                "net_percent": 0.0, "net_peak_bps": 0.0, "net_rx_total": 0, "net_tx_total": 0}
+    rx, tx = sample
+    ts = time.time()
+    prev = _NET_PREV
+    span = ts - prev["t"] if prev["t"] else 0
+    if prev["t"] and span >= 0.2:
+        _NET_LAST["rx"] = max(0.0, rx - prev["rx"]) / span
+        _NET_LAST["tx"] = max(0.0, tx - prev["tx"]) / span
+        _NET_PEAK["rx"] = max(_NET_PEAK["rx"], _NET_LAST["rx"])
+        _NET_PEAK["tx"] = max(_NET_PEAK["tx"], _NET_LAST["tx"])
+        _NET_PREV.update({"t": ts, "rx": rx, "tx": tx})
+    elif not prev["t"]:
+        _NET_PREV.update({"t": ts, "rx": rx, "tx": tx})
+    total = _NET_LAST["rx"] + _NET_LAST["tx"]
+    peak = _NET_PEAK["rx"] + _NET_PEAK["tx"]
+    return {
+        "net_rx_bps": round(_NET_LAST["rx"], 1),
+        "net_tx_bps": round(_NET_LAST["tx"], 1),
+        "net_total_bps": round(total, 1),
+        "net_peak_bps": round(peak, 1),
+        "net_cap_mbps": cap,
+        "net_percent": round(total * 100.0 / (cap * 125000.0), 1),
+        "net_rx_total": rx,
+        "net_tx_total": tx,
+    }
+
+
 @route("GET", "/api/admin/overview", staff=True)
 async def admin_overview(req):
     import ws
+    scope, cid = class_scope(req)
+    user_where, user_args = scope_where(scope, cid, "class_id", "u.")
+    sess_where, sess_args = session_scope_where(scope, cid)
+    super_admin = is_super(req.user)
+
+    def count(sql, args=()):
+        return db.query_one(sql, tuple(args))["c"]
+
+    live = ws.live_conns()
+    if scope != "all":
+        keep = cid if scope == "one" else 0
+        live = [c for c in live if class_id_of(c.user) == keep]
     payload = {
-        "online": len({c.uid for c in ws.CONNS if not c.closed}),
-        "online_users": sorted({c.user["name"] for c in ws.CONNS if not c.closed}),
-        "users": db.query_one("SELECT COUNT(*) AS c FROM users")["c"],
-        "members": db.query_one("SELECT COUNT(*) AS c FROM users WHERE role='member'")["c"],
-        "sessions": db.query_one("SELECT COUNT(*) AS c FROM sign_sessions")["c"],
-        "records": db.query_one("SELECT COUNT(*) AS c FROM records")["c"],
-        "posts": db.query_one("SELECT COUNT(*) AS c FROM posts WHERE deleted = 0")["c"],
-        "games": db.query_one("SELECT COUNT(*) AS c FROM game_records")["c"],
-        "topics": db.query_one("SELECT COUNT(*) AS c FROM topics WHERE deleted = 0")["c"],
+        "online": len({c.uid for c in live}),
+        "online_users": sorted({c.user["name"] for c in live}),
+        "online_people": sorted({(c.uid, c.user["name"], c.user.get("avatar") or "",
+                                  class_id_of(c.user), auth.class_name_of(c.user.get("class_id")))
+                                 for c in live}, key=lambda item: item[0]),
+        "users": count("SELECT COUNT(*) AS c FROM users u WHERE 1 = 1%s" % user_where, user_args),
+        "members": count("SELECT COUNT(*) AS c FROM users u WHERE u.role='member'%s" % user_where, user_args),
+        "sessions": count("SELECT COUNT(*) AS c FROM sign_sessions s WHERE 1 = 1%s"
+                          % sess_where.replace("class_id", "s.class_id"), sess_args),
+        "records": count(
+            "SELECT COUNT(*) AS c FROM records r JOIN users u ON u.id = r.user_id "
+            "JOIN sign_sessions s ON s.id = r.session_id WHERE 1 = 1%s%s"
+            % (user_where, sess_where.replace("class_id", "s.class_id")), list(user_args) + list(sess_args)),
+        "posts": count("SELECT COUNT(*) AS c FROM posts WHERE deleted = 0"),
+        "games": count("SELECT COUNT(*) AS c FROM game_records"),
+        "topics": count("SELECT COUNT(*) AS c FROM topics WHERE deleted = 0"),
         "role": req.user.get("role") or "member",
-        "is_admin": req.user.get("role") == "admin",
+        "is_admin": super_admin,
+        "is_super": super_admin,
+        "my_class_id": class_id_of(req.user),
+        "my_class_name": auth.class_name_of(req.user.get("class_id")),
+        "scope": scope,
+        "scope_class": cid,
+        "classes": class_list(),
         "settings": db.get_settings(),
     }
-    if req.user.get("role") == "admin":
+    if super_admin:
         payload["server"] = server_stats()
+        payload["net"] = net_stats()
     return ok(payload)
 
 
-@route("GET", "/api/admin/users", admin=True)
+@route("GET", "/api/admin/users", manage=True)
 async def admin_users(req):
+    """成员列表：总管理员可选班（?class=all|0|N），班级管理员只能看本班。"""
+    scope, cid = class_scope(req)
+    where, args = scope_where(scope, cid)
+    rows = db.query("SELECT * FROM users WHERE 1 = 1%s ORDER BY role DESC, id ASC" % where, tuple(args))
     out = []
-    for u in member_list():
+    for u in rows:
         item = auth.public_user(u, req.user)
         item["username"] = u["username"]
         item["checked"] = db.query_one(
             "SELECT COUNT(*) AS c FROM records WHERE user_id = ? AND status IN ('present','late')", (u["id"],))["c"]
         out.append(item)
-    return ok({"users": out})
+    return ok({"users": out, "classes": class_list(), "scope": scope, "scope_class": cid,
+               "is_super": is_super(req.user), "can_create": is_super(req.user),
+               "my_class_id": class_id_of(req.user)})
 
 
 @route("POST", "/api/admin/users", admin=True)
@@ -1153,35 +1522,55 @@ async def admin_user_create(req):
     username = (data.get("username") or "").strip()
     name = (data.get("name") or "").strip() or username
     password = (data.get("password") or "").strip() or db.random_password()
-    role = data.get("role") if data.get("role") in ("admin", "committee", "study", "member") else "member"
+    role = data.get("role") if data.get("role") in ("admin", "class_admin", "committee", "study", "member") else "member"
     if len(username) < 2:
         raise HttpError(400, "用户名至少 2 位")
     if db.query_one("SELECT id FROM users WHERE username = ?", (username,)):
         raise HttpError(409, "用户名已存在")
+    class_id = int(data.get("class_id") or 0)
+    if class_id and not db.query_one("SELECT id FROM classes WHERE id = ?", (class_id,)):
+        raise HttpError(400, "班级不存在，请先创建班级")
     password_hash, salt = auth.hash_password(password)
     uid = db.execute(
-        "INSERT INTO users(username, name, role, password_hash, salt, color, note, created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (username, name, role, password_hash, salt, data.get("color") or "", data.get("note") or "", now()))
+        "INSERT INTO users(username, name, role, password_hash, salt, color, note, created_at, class_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (username, name, role, password_hash, salt, data.get("color") or "", data.get("note") or "", now(), class_id))
     db.audit(req.user["id"], "admin.user.create", "%s(%s)" % (name, username), req.client_ip)
     return ok({"id": uid, "password": password})
 
 
-@route("PATCH", "/api/admin/users/{uid}", admin=True)
+@route("PATCH", "/api/admin/users/{uid}", manage=True)
 async def admin_user_update(req, uid):
     data = req.json()
     target = db.query_one("SELECT * FROM users WHERE id = ?", (int(uid),))
     if not target:
         raise HttpError(404, "用户不存在")
+    super_admin = is_super(req.user)
+    if not can_touch_user(req.user, target):
+        raise HttpError(403, "你只能管理自己班里的成员")
+    if not super_admin and target["role"] in ("admin", "class_admin"):
+        raise HttpError(403, "你无权修改管理员账号")
     fields, args = [], []
     for key in ("name", "note", "color"):
         if key in data:
             fields.append("%s = ?" % key)
             args.append(str(data[key])[:200])
     if "role" in data:
-        if data["role"] not in ("admin", "committee", "study", "member"):
+        new_role = data["role"]
+        if new_role not in ("admin", "class_admin", "committee", "study", "member"):
             raise HttpError(400, "未知的身份类型")
+        if not super_admin and new_role not in ("committee", "study", "member"):
+            raise HttpError(403, "只有总管理员能任命管理员")
         fields.append("role = ?")
-        args.append(data["role"])
+        args.append(new_role)
+    if "class_id" in data:
+        if not super_admin:
+            raise HttpError(403, "只有总管理员能调整成员班级")
+        new_class = int(data["class_id"] or 0)
+        if new_class and not db.query_one("SELECT id FROM classes WHERE id = ?", (new_class,)):
+            raise HttpError(400, "班级不存在")
+        fields.append("class_id = ?")
+        args.append(new_class)
     for key in ("banned", "muted"):
         if key in data:
             fields.append("%s = ?" % key)
@@ -1198,11 +1587,14 @@ async def admin_user_update(req, uid):
     return ok({"updated": True})
 
 
-@route("POST", "/api/admin/users/{uid}/reset-password", admin=True)
+@route("POST", "/api/admin/users/{uid}/reset-password", manage=True)
 async def admin_user_reset(req, uid):
     target = db.query_one("SELECT * FROM users WHERE id = ?", (int(uid),))
     if not target:
         raise HttpError(404, "用户不存在")
+    if not can_touch_user(req.user, target) or (
+            not is_super(req.user) and target["role"] in ("admin", "class_admin")):
+        raise HttpError(403, "你只能重置自己班里成员的密码")
     data = req.json()
     password = (data.get("password") or "").strip() or db.random_password()
     password_hash, salt = auth.hash_password(password)
@@ -1212,13 +1604,17 @@ async def admin_user_reset(req, uid):
     return ok({"password": password})
 
 
-@route("DELETE", "/api/admin/users/{uid}", admin=True)
+@route("DELETE", "/api/admin/users/{uid}", manage=True)
 async def admin_user_delete(req, uid):
     target = db.query_one("SELECT * FROM users WHERE id = ?", (int(uid),))
     if not target:
         raise HttpError(404, "用户不存在")
     if target["id"] == req.user["id"]:
         raise HttpError(400, "不能删除自己")
+    if not can_touch_user(req.user, target):
+        raise HttpError(403, "你只能删除自己班里的成员")
+    if not is_super(req.user) and target["role"] in ("admin", "class_admin"):
+        raise HttpError(403, "你无权删除管理员账号")
     if target["role"] == "admin":
         if db.query_one("SELECT COUNT(*) AS c FROM users WHERE role='admin'")["c"] <= 1:
             raise HttpError(400, "至少要保留一个管理员")
@@ -1231,14 +1627,23 @@ async def admin_user_delete(req, uid):
 
 @route("GET", "/api/admin/sign-sessions", staff=True)
 async def admin_sign_sessions(req):
-    rows = db.query("SELECT * FROM sign_sessions ORDER BY starts_at DESC LIMIT 200")
+    scope, cid = class_scope(req)
+    where, args = session_scope_where(scope, cid)
+    rows = db.query("SELECT * FROM sign_sessions WHERE 1 = 1%s ORDER BY starts_at DESC LIMIT 200" % where,
+                    tuple(args))
     out = []
     for r in rows:
         item = session_view(r)
         item["code"] = r["code"]
         item["created_by"] = r["created_by"]
+        item["class_id"] = int(r.get("class_id") or 0)
+        item["class_name"] = auth.class_name_of(r.get("class_id")) or "全体"
+        item["mine"] = (int(r.get("class_id") or 0) == class_id_of(req.user) and class_id_of(req.user) != 0) \
+            or is_super(req.user)
         out.append(item)
-    return ok({"sessions": out})
+    return ok({"sessions": out, "classes": class_list(), "scope": scope, "scope_class": cid,
+               "is_super": is_super(req.user), "my_class_id": class_id_of(req.user),
+               "my_class_name": auth.class_name_of(req.user.get("class_id"))})
 
 
 @route("POST", "/api/admin/sign-sessions", staff=True)
@@ -1258,6 +1663,14 @@ async def admin_sign_create(req):
         if parse_hhmm(hhmm) is None:
             raise HttpError(400, "签到时间格式应为 HH:MM")
         sign_at = ts_at_hhmm(hhmm, ts, grace * 60)
+    if is_super(req.user):
+        target_class = int(data.get("class_id") or 0)
+        if target_class and not db.query_one("SELECT id FROM classes WHERE id = ?", (target_class,)):
+            raise HttpError(400, "班级不存在")
+    else:
+        # 还没分班（或者管理员自己就是「未指定班级」）时，退回成全体可见的公共场次，
+        # 这样单班时代的老用法不会因为没建班级就直接罢工。
+        target_class = class_id_of(req.user)
     title = (data.get("title") or "").strip()[:60] or ("签到 " + fmt(sign_at, "%H:%M"))
     code = (data.get("code") or db.random_code()).strip()[:8]
     require_location = 1 if data.get("require_location") else 0
@@ -1269,8 +1682,8 @@ async def admin_sign_create(req):
     radius = max(20, min(radius, 5000))
     sid = db.execute(
         "INSERT INTO sign_sessions(title, code, status, created_by, created_at, starts_at, ends_at, late_after, "
-        "allow_leave, require_note, note, sign_at, grace_minutes, require_location, lat, lng, radius, place) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "allow_leave, require_note, note, sign_at, grace_minutes, require_location, lat, lng, radius, place, class_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (title, code, "open", req.user["id"], ts, ts,
          sign_at + grace * 60,
          sign_at,
@@ -1278,19 +1691,24 @@ async def admin_sign_create(req):
          1 if data.get("require_note") else 0,
          (data.get("note") or "")[:200],
          sign_at, grace, require_location, lat, lng, radius,
-         (data.get("place") or "")[:80]))
+         (data.get("place") or "")[:80], target_class))
     db.audit(req.user["id"], "admin.session.create", "#%d %s" % (sid, title), req.client_ip)
     asyncio.ensure_future(ws.broadcast({"t": "sign.new", "id": sid, "title": title,
-                                        "sign_at": sign_at, "require_location": require_location}))
-    return ok({"id": sid, "code": code, "sign_at": sign_at, "ends_at": sign_at + grace * 60})
+                                        "sign_at": sign_at, "require_location": require_location,
+                                        "class_id": target_class}))
+    return ok({"id": sid, "code": code, "sign_at": sign_at, "ends_at": sign_at + grace * 60,
+               "class_id": target_class})
 
 
 @route("PATCH", "/api/admin/sign-sessions/{sid}", staff=True)
 async def admin_sign_update(req, sid):
     data = req.json()
     session_id = int(sid)
-    if not db.query_one("SELECT id FROM sign_sessions WHERE id = ?", (session_id,)):
+    row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (session_id,))
+    if not row:
         raise HttpError(404, "场次不存在")
+    if not is_super(req.user) and int(row.get("class_id") or 0) != class_id_of(req.user):
+        raise HttpError(403, "这条签到不属于你的班级")
     fields, args = [], []
     for key in ("title", "code", "status", "note", "place"):
         if key in data:
@@ -1318,6 +1736,11 @@ async def admin_sign_update(req, sid):
 
 @route("DELETE", "/api/admin/sign-sessions/{sid}", staff=True)
 async def admin_sign_delete(req, sid):
+    row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (int(sid),))
+    if not row:
+        raise HttpError(404, "场次不存在")
+    if not is_super(req.user) and int(row.get("class_id") or 0) != class_id_of(req.user):
+        raise HttpError(403, "这条签到不属于你的班级")
     db.execute("DELETE FROM sign_sessions WHERE id = ?", (int(sid),))
     db.execute("DELETE FROM records WHERE session_id = ?", (int(sid),))
     db.audit(req.user["id"], "admin.session.delete", "#%s" % sid, req.client_ip)
@@ -1328,14 +1751,19 @@ async def admin_sign_delete(req, sid):
 @route("GET", "/api/admin/records", staff=True)
 async def admin_records(req):
     sid = req.int_param("session_id", 0)
+    scope, cid = class_scope(req)
+    user_where, user_args = scope_where(scope, cid, "class_id", "u.")
+    sess_where, sess_args = session_scope_where(scope, cid, "s.")
     if sid:
         rows = db.query(
             "SELECT r.*, u.name, u.username, u.avatar FROM records r JOIN users u ON u.id = r.user_id "
-            "WHERE r.session_id = ? ORDER BY r.created_at", (sid,))
+            "WHERE r.session_id = ?%s ORDER BY r.created_at" % user_where, tuple([sid] + user_args))
     else:
         rows = db.query(
             "SELECT r.*, u.name, u.username, u.avatar FROM records r JOIN users u ON u.id = r.user_id "
-            "ORDER BY r.id DESC LIMIT 300")
+            "JOIN sign_sessions s ON s.id = r.session_id WHERE 1 = 1%s%s "
+            "ORDER BY r.id DESC LIMIT 300" % (user_where, sess_where),
+            tuple(list(user_args) + list(sess_args)))
     return ok({"records": [{
         "id": r["id"], "session_id": r["session_id"], "user_id": r["user_id"], "name": r["name"],
         "username": r["username"], "status": r["status"], "note": r["note"], "created_at": r["created_at"],
@@ -1347,9 +1775,11 @@ async def admin_records(req):
 STATUS_TEXT = {"present": "已签到", "late": "迟到", "leave": "请假", "absent": "缺勤", "none": "未记录"}
 
 
-def session_roster(session_id):
-    """一个场次的全班名单：每个人当前是什么状态（没有记录就是"未记录"）。"""
-    users = db.query("SELECT id, name, username, avatar FROM users WHERE banned = 0 ORDER BY id")
+def session_roster(session_id, scope="all", cid=0):
+    """一个场次的本班名单：每个人当前是什么状态（没有记录就是"未记录"）。"""
+    where, args = scope_where(scope, cid)
+    users = db.query("SELECT id, name, username, avatar, class_id FROM users WHERE banned = 0%s ORDER BY id"
+                     % where, tuple(args))
     recs = {r["user_id"]: r for r in db.query("SELECT * FROM records WHERE session_id = ?", (session_id,))}
     rows, counts = [], {"present": 0, "late": 0, "leave": 0, "absent": 0, "none": 0}
     for u in users:
@@ -1373,7 +1803,10 @@ async def admin_session_roster(req):
     row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (sid,))
     if not row:
         raise HttpError(404, "场次不存在")
-    rows, counts = session_roster(sid)
+    if not is_super(req.user) and int(row.get("class_id") or 0) not in (0, class_id_of(req.user)):
+        raise HttpError(403, "这条签到不属于你的班级")
+    scope, cid = class_scope(req)
+    rows, counts = session_roster(sid, scope, cid)
     return ok({"session": session_view(row), "roster": rows, "counts": counts})
 
 
@@ -1391,12 +1824,18 @@ def _rate(present, late, total):
 async def admin_records_xlsx(req):
     """把全部场次的签到记录导出成 Excel（.xlsx 用标准库 zipfile 现写，不依赖第三方包）。"""
     import xlsx
+    scope, cid = class_scope(req)
+    user_where, user_args = scope_where(scope, cid)
+    sess_where, sess_args = session_scope_where(scope, cid)
     sid = req.int_param("session_id", 0)
     if sid:
-        sessions = db.query("SELECT * FROM sign_sessions WHERE id = ?", (sid,))
+        sessions = db.query("SELECT * FROM sign_sessions WHERE id = ?%s" % sess_where, tuple([sid] + sess_args))
     else:
-        sessions = db.query("SELECT * FROM sign_sessions ORDER BY sign_at DESC, id DESC LIMIT 500")
-    users = db.query("SELECT id, name, username FROM users WHERE banned = 0 ORDER BY id")
+        sessions = db.query(
+            "SELECT * FROM sign_sessions WHERE 1 = 1%s ORDER BY sign_at DESC, id DESC LIMIT 500" % sess_where,
+            tuple(sess_args))
+    users = db.query("SELECT id, name, username FROM users WHERE banned = 0%s ORDER BY id" % user_where,
+                     tuple(user_args))
     user_acc = {u["id"]: u["username"] for u in users}
     total_users = len(users)
 
@@ -1408,8 +1847,8 @@ async def admin_records_xlsx(req):
 
     for sess in sessions:
         rows = list(db.query(
-            "SELECT r.*, u.name AS uname FROM records r JOIN users u ON u.id = r.user_id WHERE r.session_id = ?",
-            (sess["id"],)))
+            "SELECT r.*, u.name AS uname FROM records r JOIN users u ON u.id = r.user_id "
+            "WHERE r.session_id = ?%s" % user_where, tuple([sess["id"]] + user_args)))
         got = {}
         for r in rows:
             got[r["user_id"]] = r
@@ -1462,6 +1901,16 @@ async def admin_record_add(req):
     status = data.get("status") or "present"
     if status not in ("present", "late", "leave", "absent"):
         raise HttpError(400, "状态不合法")
+    sess_row = db.query_one("SELECT * FROM sign_sessions WHERE id = ?", (session_id,))
+    if not sess_row:
+        raise HttpError(404, "场次不存在")
+    if not can_see_session(req.user, sess_row):
+        raise HttpError(403, "这条签到不属于你的班级")
+    target_user = db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
+    if not target_user:
+        raise HttpError(404, "用户不存在")
+    if not can_touch_user(req.user, target_user):
+        raise HttpError(403, "你只能修改自己班里成员的记录")
     ts = now()
     existing = db.query_one("SELECT * FROM records WHERE session_id = ? AND user_id = ?", (session_id, user_id))
     if existing:
@@ -1479,6 +1928,12 @@ async def admin_record_add(req):
 @route("PATCH", "/api/admin/records/{rid}", staff=True)
 async def admin_record_update(req, rid):
     data = req.json()
+    rec = db.query_one("SELECT * FROM records WHERE id = ?", (int(rid),))
+    if not rec:
+        raise HttpError(404, "记录不存在")
+    owner = db.query_one("SELECT * FROM users WHERE id = ?", (rec["user_id"],))
+    if not owner or not can_touch_user(req.user, owner):
+        raise HttpError(403, "你只能修改自己班里成员的记录")
     fields, args = [], []
     if "status" in data:
         fields.append("status = ?")
@@ -1498,6 +1953,12 @@ async def admin_record_update(req, rid):
 
 @route("DELETE", "/api/admin/records/{rid}", admin=True)
 async def admin_record_delete(req, rid):
+    rec = db.query_one("SELECT * FROM records WHERE id = ?", (int(rid),))
+    if not rec:
+        raise HttpError(404, "记录不存在")
+    owner = db.query_one("SELECT * FROM users WHERE id = ?", (rec["user_id"],))
+    if not owner or not can_touch_user(req.user, owner):
+        raise HttpError(403, "你只能删除自己班里成员的记录")
     db.execute("DELETE FROM records WHERE id = ?", (int(rid),))
     db.audit(req.user["id"], "admin.record.delete", "#%s" % rid, req.client_ip)
     return ok({"deleted": True})
@@ -1515,7 +1976,7 @@ async def admin_posts(req):
     } for r in rows]})
 
 
-@route("PATCH", "/api/admin/posts/{pid}", admin=True)
+@route("PATCH", "/api/admin/posts/{pid}", manage=True)
 async def admin_post_update(req, pid):
     data = req.json()
     fields, args = [], []
@@ -1538,20 +1999,31 @@ async def admin_announce(req):
     content = (data.get("content") or "").strip()[:500]
     if not content:
         raise HttpError(400, "内容不能为空")
+    if is_super(req.user):
+        announce_class = int(data.get("class_id") or 0)
+        if announce_class and not db.query_one("SELECT id FROM classes WHERE id = ?", (announce_class,)):
+            raise HttpError(400, "班级不存在")
+    else:
+        announce_class = class_id_of(req.user)
     post_id = db.execute(
-        "INSERT INTO posts(author_id, anon, anon_name, content, kind, created_at) VALUES(?,?,?,?,?,?)",
-        (req.user["id"], 0, req.user["name"], content, "announce", now()))
+        "INSERT INTO posts(author_id, anon, anon_name, content, kind, created_at, class_id) VALUES(?,?,?,?,?,?,?)",
+        (req.user["id"], 0, req.user["name"], content, "announce", now(), announce_class))
     import asyncio
     import ws
-    asyncio.ensure_future(ws.broadcast({"t": "announce", "content": content, "id": post_id, "created_at": now()}))
+    asyncio.ensure_future(ws.broadcast({"t": "announce", "content": content, "id": post_id,
+                                        "created_at": now(), "class_id": announce_class,
+                                        "author": req.user["name"]}))
     db.audit(req.user["id"], "admin.announce", content[:80], req.client_ip)
-    return ok({"id": post_id})
+    return ok({"id": post_id, "class_id": announce_class})
 
 
 @route("GET", "/api/admin/logs", staff=True)
 async def admin_logs(req):
+    scope, cid = class_scope(req)
+    log_where, log_args = scope_where(scope, cid, "class_id", "u.")
     rows = db.query(
-        "SELECT a.*, u.name FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 300")
+        "SELECT a.*, u.name FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id "
+        "WHERE 1 = 1%s ORDER BY a.id DESC LIMIT 300" % log_where, tuple(log_args))
     return ok({"logs": [{
         "id": r["id"], "user_id": r["user_id"], "name": r["name"] or "系统", "action": r["action"],
         "detail": r["detail"], "ip": mask_ip(r["ip"]), "created_at": r["created_at"],
@@ -1562,7 +2034,7 @@ async def admin_logs(req):
 async def admin_settings(req):
     data = req.json()
     allowed = {"site_name", "site_subtitle", "chat_enabled", "games_enabled", "signin_enabled",
-               "register_open", "checkin_code_required", "version_h5"}
+               "register_open", "checkin_code_required", "version_h5", "net_cap_mbps"}
     changed = {}
     for key, value in data.items():
         if key in allowed:

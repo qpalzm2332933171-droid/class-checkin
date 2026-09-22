@@ -117,7 +117,7 @@ registerRoute("/login", defineView("login", {
         localStorage.setItem("checkin_last_user", name);
         wsConnect();
         haptic(12);
-        navigate(res.user.role === "admin" ? "/admin" : "/");
+        navigate(["admin", "class_admin", "committee", "study"].includes(res.user.role) ? "/admin" : "/");
       } catch (err) {
         error.value = err.message || "登录失败";
         haptic([14, 40, 14]);

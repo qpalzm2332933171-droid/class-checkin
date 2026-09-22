@@ -62,7 +62,8 @@ def login(user, pwd):
 tok_staff = login(STAFF[0], STAFF[1])
 tok_member = login(MEMBER[0], MEMBER[1])
 staff_role = (http("GET", "/api/me", token=tok_staff)[1].get("user") or {}).get("role")
-can_delete = staff_role == "admin"
+# 资委/学委也有删除场次的权限（用户 2026-09-20 明确要求），只有普通成员不能删
+can_delete = staff_role in ("admin", "class_admin", "committee", "study")
 
 # ---- 1. 定位签到: 超出半径应被拒绝
 started = int(time.time()) - 60

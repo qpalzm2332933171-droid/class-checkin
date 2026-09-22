@@ -1,6 +1,7 @@
-/* 阶段 T 回归：观战「讨论」悬浮按钮被压扁 · 弹幕全员可见 · 弹幕大战重写（体积/横屏/能玩/记分）
+/* 阶段 T 回归：观战「讨论」悬浮按钮被压扁 · 弹幕全员可见 · 弹幕大战 Phaser 版（体积/能玩/记分/竖屏自适应）
    用法：CDP_PORTS=9336,9337,9338 node features-round-t.mjs
-   账号：gt01 / gt02（两位棋手）、cw01（观战者）、ww01（用来验积分，避开 10 秒冷却） */
+   账号：gt01 / gt02（两位棋手）、cw01（观战者）、ww01（用来验积分，避开 10 秒冷却）
+   口令走环境变量：SOLO_USER / SOLO_PASS（默认 ww01，口令不写进仓库）、ADMIN_PASS、STAFF_PASS */
 import fs from 'node:fs';
 import path from 'node:path';
 import { connect, login, BASE, PORTS } from './harness.mjs';
@@ -100,63 +101,68 @@ try {
     "window.__errs=[];window.addEventListener('error',function(e){window.__errs.push(String(e.message||e));});" +
     "window.addEventListener('unhandledrejection',function(e){window.__errs.push('rej:'+String(e.reason));});" });
 
-  /* ---------------------------------------------------------- 5. 弹幕大战：体积 */
+  /* ---------------------------------------------------------- 5. 弹幕大战：体积（Phaser 版三件套） */
   const dir = path.resolve(HERE, '../../web/games/danmaku');
-  const files = fs.readdirSync(dir);
-  const size = fs.statSync(path.join(dir, 'index.html')).size;
-  check('弹幕大战：整包只剩一个 index.html（Phaser 已删）', files.length === 1 && files[0] === 'index.html', JSON.stringify(files));
-  check('弹幕大战：体积 ' + (size / 1024).toFixed(1) + 'KB（要求 <=257KB）', size <= 257 * 1024, size + ' bytes');
+  const files = fs.readdirSync(dir).sort();
+  const gsize = fs.statSync(path.join(dir, 'index.html')).size;
+  const phSize = fs.statSync(path.join(dir, 'phaser.min.js')).size;
+  const bgmSize = fs.statSync(path.join(dir, 'bgm.mp3')).size;
+  check('弹幕大战：三件套齐全（index.html + phaser.min.js + bgm.mp3）',
+        JSON.stringify(files) === JSON.stringify(['bgm.mp3', 'index.html', 'phaser.min.js']), JSON.stringify(files));
+  /* 曾经 index.html 里内联了一份 9.8MB 的 base64 BGM（与 bgm.mp3 逐字节相同），
+     页面 9.9MB → 手机 3Mbps 下要 30 秒才能跑到游戏，期间只有黑屏 + TIME 00:00。
+     现在只保留外部 bgm.mp3，页面必须保持「小」。 */
+  check('弹幕大战：index.html 不再内嵌音频（' + (gsize / 1024).toFixed(1) + 'KB）', gsize < 512 * 1024, gsize + ' bytes');
+  check('弹幕大战：index.html 里没有 data:audio 内联',
+        !/data:audio\//.test(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')), 'still inlined');
+  check('弹幕大战：引擎与回退音源就位（' + (phSize / 1024).toFixed(0) + 'KB / ' + (bgmSize / 1024).toFixed(0) + 'KB）',
+        phSize > 500 * 1024 && bgmSize > 3 * 1024 * 1024, phSize + '/' + bgmSize);
 
-  /* ---------------------------------------------------------- 6. 弹幕大战：能玩、能记分（页面内 ?test=1 钩子） */
+  /* ---------------------------------------------------------- 6. 弹幕大战：能玩、能记分（Phaser 版,?autotest=1 钩子验死亡与结算面板） */
   await C.viewport(932, 430, 1);
-  await C.goto(BASE + '/games/danmaku/index.html?test=1', 1800);
-  const boot0 = JSON.parse(await C.js("JSON.stringify({hook:!!window.__dm,cv:[document.getElementById('cv').clientWidth,document.getElementById('cv').clientHeight],menu:!document.getElementById('menu').hidden,rot:document.getElementById('rotate').hidden,title:document.title})"));
-  check('弹幕大战：横屏下正常加载（画布铺开、菜单可见、不弹竖屏提示）',
-        boot0.hook === true && boot0.cv[0] > 600 && boot0.cv[1] > 300 && boot0.menu === true && boot0.rot === true, JSON.stringify(boot0));
-  await C.clickSel('#go'); await sleep(600);
-  let st = JSON.parse(await C.js("JSON.stringify(window.__dm.st())"));
-  check('弹幕大战：点开始进入战斗状态', st.state === 'play', JSON.stringify(st));
-  /* 左右横扫，保证子弹能扫到怪 */
-  for (let i = 0; i < 4 && st.kills === 0; i++) {
-    await C.mouse('mousePressed', 700, 340);
-    for (let k = 1; k <= 14; k++) { await C.mouse('mouseMoved', 700 - k * 42, 340); await sleep(35); }
-    await C.mouse('mouseReleased', 112, 340);
-    await sleep(250);
-    await C.mouse('mousePressed', 112, 340);
-    for (let k = 1; k <= 14; k++) { await C.mouse('mouseMoved', 112 + k * 42, 340); await sleep(35); }
-    await C.mouse('mouseReleased', 700, 340);
-    await sleep(500);
-    st = JSON.parse(await C.js("JSON.stringify(window.__dm.st())"));
-  }
-  check('弹幕大战：真的能打（拖动操控 + 自动开火能击破，得分 ' + st.score + '）', st.kills > 0 && st.score > 0, JSON.stringify(st));
-  const ink = await C.js("JSON.stringify((function(){var c=document.getElementById('cv');var g=c.getContext('2d');" +
-    "var d=g.getImageData(0,0,c.width,c.height).data;var n=0;for(var i=3;i<d.length;i+=4*53){if(d[i]>8)n++;}return n;})())");
-  check('弹幕大战：画布确实在画东西（不是黑屏）', Number(ink) > 20, ink);
+  await C.goto(BASE + '/games/danmaku/index.html', 2600);
+  const boot0 = JSON.parse(await C.js("JSON.stringify({phaser:!!window.Phaser," +
+    "cv:(function(){var c=document.getElementById('gameCanvas');return c?[c.clientWidth,c.clientHeight]:null;})()," +
+    "over:(function(){var o=document.getElementById('gameOver');return !!o && !o.classList.contains('hidden');})()," +
+    "title:document.title})"));
+  check('弹幕大战：横屏下正常加载（Phaser 引擎、画布铺开、还没 GAME OVER）',
+        boot0.phaser === true && !!boot0.cv && boot0.cv[0] > 600 && boot0.cv[1] > 300 && boot0.over === false,
+        JSON.stringify(boot0));
+  /* 进页面即开战：自动开火 + 敌人下坠，不动鼠标也会得分，HUD 分数/时间至少有一个在动 */
+  const hud1 = JSON.parse(await C.js("JSON.stringify({sc:document.getElementById('scoreEl').textContent," +
+    "tm:document.getElementById('timeEl').textContent})"));
+  await sleep(2200);
+  const hud2 = JSON.parse(await C.js("JSON.stringify({sc:document.getElementById('scoreEl').textContent," +
+    "tm:document.getElementById('timeEl').textContent})"));
+  check('弹幕大战：真的在跑（HUD 分数/时间在动）', hud2.sc !== hud1.sc || hud2.tm !== hud1.tm,
+        JSON.stringify(hud1) + ' -> ' + JSON.stringify(hud2));
+  /* 画面在渲染：CDP 整页截图，纯黑屏的 PNG 只有几 KB，有画面的会大得多（截图会强制出一帧新画面，
+     不受 WebGL 后缓冲读取语义影响，比 getImageData 稳） */
+  const shot = await C.send('Page.captureScreenshot', { format: 'png' });
+  const shotSize = shot.result && shot.result.data ? Math.round(shot.result.data.length * 3 / 4) : 0;
+  check('弹幕大战：画布确实在画东西（不是黑屏，截图 ' + (shotSize / 1024).toFixed(1) + 'KB）', shotSize > 8000, shotSize + ' bytes');
   const errs = await C.js("JSON.stringify(window.__errs || [])");
   check('弹幕大战：运行期零 JS 报错', errs === '[]', errs);
 
-  /* 结算上报：分数 -> 积分（2 万分 = 1 分） */
-  await C.js("window.__dm.set({score:42500});'ok'");
-  await C.js("window.__dm.over();'ok'");
-  await sleep(400);
-  const over = JSON.parse(await C.js("JSON.stringify({over:!document.getElementById('over').hidden,sc:document.getElementById('ovScore').textContent,aw:document.getElementById('ovAward').textContent,sent:window.__dm.st().sent})"));
-  const posted = over.sent.filter((m) => m && m.type === 'danmaku-score' && m.score === 42500);
-  check('弹幕大战：GAME OVER 会把分数 postMessage 给宿主', posted.length === 1, JSON.stringify(over.sent));
-  check('弹幕大战：结算面板显示分数与 +2 积分', over.over === true && over.sc === '42500' && over.aw.indexOf('+2') >= 0, over.sc + ' / ' + over.aw);
+  /* 结算链路：?autotest=1 载入即 0.6 秒后以 42000 分强制死亡 → GAME OVER 面板弹分 */
+  await C.goto(BASE + '/games/danmaku/index.html?autotest=1', 2400);
+  const over0 = JSON.parse(await C.js("JSON.stringify({over:(function(){var o=document.getElementById('gameOver');" +
+    "return !!o && !o.classList.contains('hidden');})(),sc:document.getElementById('overScore').textContent})"));
+  check('弹幕大战：?autotest=1 强制死亡,GAME OVER 面板弹出 SCORE 042000', over0.over === true && over0.sc === 'SCORE 042000',
+        JSON.stringify(over0));
 
-  /* 竖屏要有引导，但不能卡死玩家 */
+  /* 竖屏自适应：画布跟随窗口，不弹遮挡面板也不卡死 */
   await C.viewport(390, 844, 1);
-  await sleep(500);
-  const rot = JSON.parse(await C.js("JSON.stringify({rot:!document.getElementById('rotate').hidden,w:document.getElementById('cv').clientWidth,h:document.getElementById('cv').clientHeight})"));
-  check('弹幕大战：竖屏会提示横屏', rot.rot === true && rot.h > rot.w, JSON.stringify(rot));
-  await C.clickSel('#rotSkip'); await sleep(400);
-  const rot2 = await C.js("document.getElementById('rotate').hidden");
-  check('弹幕大战：竖屏也能继续玩（有退路，不会卡住）', rot2 === true, String(rot2));
+  await sleep(700);
+  const por = JSON.parse(await C.js("JSON.stringify({cv:(function(){var c=document.getElementById('gameCanvas');" +
+    "return c?[c.clientWidth,c.clientHeight]:null;})(),over:(function(){var o=document.getElementById('gameOver');" +
+    "return !!o && !o.classList.contains('hidden');})()})"));
+  check('弹幕大战：竖屏自适应（画布跟随窗口，不会卡死）', !!por.cv && por.cv[1] > por.cv[0] && por.cv[0] > 300, JSON.stringify(por));
   await C.viewport(932, 430, 1);
 
   /* ---------------------------------------------------------- 7. 服务器积分接口（2 万分 = 1 分，上限 10） */
   const tokenW = await (await fetch(BASE + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'ww01', password: 'wwpass1' }) })).json();
+    body: JSON.stringify({ username: process.env.SOLO_USER || 'ww01', password: process.env.SOLO_PASS || '' }) })).json();
   const post = async (tok, score) => (await (await fetch(BASE + '/api/games/solo/points', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.token },
     body: JSON.stringify({ kind: 'danmaku', score: score }) })).json());
@@ -175,16 +181,15 @@ try {
   const integ = JSON.parse(await C.js("JSON.stringify({hash:location.hash,frame:document.querySelectorAll('iframe.danmaku-frame').length," +
     "back:(function(){var b=document.querySelector('.danmaku-back');if(!b)return null;var r=b.getBoundingClientRect();return {y:Math.round(r.y),h:Math.round(window.innerHeight),bottom:Math.round(window.innerHeight-r.bottom)};})()})"));
   check('弹幕大战：从大厅点进去能打开（路由 + iframe）', openCard === 'OK' && integ.hash === '#/games/danmaku' && integ.frame === 1, openCard + ' ' + JSON.stringify(integ));
-  const inner2 = JSON.parse(await C.js("JSON.stringify((function(){var f=document.querySelector('iframe.danmaku-frame');var d=f.contentDocument;return {cv:d.querySelectorAll('canvas').length,title:d.title,menu:!d.getElementById('menu').hidden};})())"));
-  check('弹幕大战：iframe 里游戏真的起来了', inner2.cv === 1 && inner2.menu === true, JSON.stringify(inner2));
+  const inner2 = JSON.parse(await C.js("JSON.stringify((function(){var f=document.querySelector('iframe.danmaku-frame');var d=f.contentDocument;if(!d)return 'NO-DOC';return {cv:d.querySelectorAll('canvas').length,title:d.title,tag:(function(){var t=d.getElementById('playerTag');return t&&!t.classList.contains('hidden')?t.textContent:null;})()};})())"));
+  check('弹幕大战：iframe 里 Phaser 游戏真的起来了', inner2 !== 'NO-DOC' && inner2.cv === 1 && /弹幕大战/.test(inner2.title || ''), JSON.stringify(inner2));
+  check('弹幕大战：宿主把玩家身份推给游戏内角标', typeof inner2.tag === 'string' && inner2.tag.indexOf('积分') >= 0, JSON.stringify(inner2.tag));
   check('弹幕大战：返回键让开了右上角 HUD，落在屏幕左下', !!integ.back && integ.back.bottom < 90, JSON.stringify(integ.back));
-  /* 宿主结算链路：模拟 iframe 上报分数 */
-  await C.js("(function(){var f=document.querySelector('iframe.danmaku-frame');f.contentWindow.location.search='?test=1';return 'ok';})()");
-  await sleep(2200);
-  const hook2 = await C.js("(function(){var f=document.querySelector('iframe.danmaku-frame');return !!(f.contentWindow.__dm);})()");
-  check('弹幕大战：iframe 里能挂上测试钩子（真·端到端上报用）', hook2 === true, String(hook2));
-  await C.js("(function(){var f=document.querySelector('iframe.danmaku-frame');f.contentWindow.__dm.set({score:42500});f.contentWindow.__dm.over();return 'ok';})()");
-  await sleep(2200);
+  /* 宿主结算链路：iframe 内 ?autotest=1 强制死亡 → postMessage 上报 → 服务端 +2 积分 → toast */
+  await C.js("(function(){var f=document.querySelector('iframe.danmaku-frame');f.contentWindow.location.search='?autotest=1';return 'ok';})()");
+  await sleep(3200);
+  const ov2 = JSON.parse(await C.js("JSON.stringify((function(){var f=document.querySelector('iframe.danmaku-frame');var d=f.contentDocument;if(!d)return 'NO-DOC';var o=d.getElementById('gameOver');return {over:!!o&&!o.classList.contains('hidden'),sc:d.getElementById('overScore').textContent};})())"));
+  check('弹幕大战：iframe 里 GAME OVER 面板弹出 SCORE 042000', ov2.over === true && ov2.sc === 'SCORE 042000', JSON.stringify(ov2));
   const toastTxt = await C.js("JSON.stringify([].slice.call(document.querySelectorAll('.toasts .toast')).map(function(t){return t.textContent.trim();}))");
   check('弹幕大战：宿主办完结算会弹出积分提示', /积分/.test(toastTxt), toastTxt);
   await C.js("(function(){var e=document.querySelector('.danmaku-back');if(e)e.click();return 'ok';})()");
@@ -192,7 +197,22 @@ try {
   check('弹幕大战：能正常返回游戏大厅', (await C.js('location.hash')) === '#/games', await C.js('location.hash'));
   await C.clearViewport();
 
+  /* ---------------------------------------------------------- 9. 2048：16 个背景块必须各就各位（曾经全叠在左上角 → 黑块，见 #1） */
+  await A.viewport(420, 860);
+  await A.goto(BASE + '/?t=' + Date.now() + '#/games/2048', 2400);
+  const b2048 = JSON.parse(await A.js("JSON.stringify((function(){var cs=[].slice.call(document.querySelectorAll('.cell-bg'));" +
+    "if(!cs.length)return {n:0};var rs=cs.map(function(e){var b=e.getBoundingClientRect();return [Math.round(b.left),Math.round(b.top)].join(',');});" +
+    "var u={};rs.forEach(function(x){u[x]=1;});var r0=rs[0];var stack=rs.filter(function(x){return x===r0;}).length;" +
+    "return {n:cs.length,uniq:Object.keys(u).length,stack:stack,bg:getComputedStyle(cs[0]).backgroundColor};})())"));
+  check('2048：16 个背景块各自独立定位（不再叠成左上角黑块）', b2048.n === 16 && b2048.uniq === 16 && b2048.stack === 1, JSON.stringify(b2048));
+  /* --hair 随深浅色主题切换：浅色 rgba(11,18,32,.08) / 深色 rgba(255,255,255,.1)，都算「半透明、没叠成不透明黑」 */
+  check('2048：背景块保持半透明（没叠成不透明黑）',
+        b2048.bg === 'rgba(255, 255, 255, 0.1)' || b2048.bg === 'rgba(11, 18, 32, 0.08)', String(b2048.bg));
+  await A.dismiss();
+  await A.clearViewport();
+
 } catch (err) {
+
   out.push('FAIL  用例异常: ' + err.message);
 }
 

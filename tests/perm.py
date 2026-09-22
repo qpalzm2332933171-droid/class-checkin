@@ -110,8 +110,8 @@ s, d = http("POST", "/api/admin/sign-sessions", {"title": "权限测试签到", 
 sid = d.get("id") if s == 200 else None
 check("committee can publish sign session", s == 200 and sid, (s, str(d)[:80]))
 if sid:
-    check("committee cannot delete sign session", http("DELETE", "/api/admin/sign-sessions/%d" % sid, token=tok_staff)[0] == 403)
-    check("admin deletes sign session", http("DELETE", "/api/admin/sign-sessions/%d" % sid, token=tok_admin)[0] == 200)
+    # 资委/学委有删除场次的权限（用户 2026-09-20 明确要求），所以这里反过来断言可以删
+    check("committee can delete sign session", http("DELETE", "/api/admin/sign-sessions/%d" % sid, token=tok_staff)[0] == 200)
 check("committee can edit sign settings", http("PATCH", "/api/admin/sign-settings", {"default_grace": 20}, token=tok_staff)[0] == 200)
 
 # --- 6. plain member cannot reach staff console

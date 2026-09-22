@@ -146,9 +146,34 @@ try {
   const xqOn = await E.wait(() => (E.room().state || {}).status === "playing", 9000);
   check("象棋开局", xqOn);
   const tap = (i) => A.js("document.querySelectorAll('.xq-cell')[" + i + "].click()");
-  await tap(64); await sleep(150); await tap(46); await sleep(700);      // 红：炮 7,1 -> 5,1
-  E.send({ t: "game.move", from: 27, to: 36 }); await sleep(700);         // 黑：卒 3,0 -> 4,0
-  await tap(46); await sleep(150); await tap(49); await sleep(900);       // 红：炮 5,1 -> 5,4 将军
+  /* 走棋必须按"页面真的收到了服务端状态"来同步，不能用固定 sleep 猜：
+     - 没收到开局推送时 statusText 还是"等待对手加入"，此时点自己的子会被当成"对手的棋子"；
+     - 收到开局但还没轮到，点了会静默丢弃。
+     所以每一步都先等"轮到你走棋"，点完再确认选中框真的落在起点上，最后拿 move_count 对账，
+     任何一环没对上就重来一次（最多 4 次），这样不会再有偶发假失败。 */
+  const moveCount = () => ((E.room().state || {}).move_count || 0);
+  const cellOf = (idx) => "document.querySelectorAll('.xq-cell')[" + idx + "]";
+  /* 注意用 .xq-cell 自己的下标算：棋盘容器里还有 .xq-lines / .xq-river 两个兄弟节点，
+     直接数 parentNode.children 会整体偏 +1（踩过这个坑）。 */
+  const selIndex = () => A.js("(function(){var all=document.querySelectorAll('.xq-cell');"
+    + "var c=document.querySelector('.xq-cell.sel');return c ? [].indexOf.call(all, c) : -1;})()");
+  const myTurn = () => waitDom(A, "document.body.innerText.indexOf('轮到你走棋') >= 0", 9000);
+  const play = async (from, to, expect) => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!await myTurn()) continue;
+      if (await selIndex() === from) await tap(from);      // 先把残留的选择清掉，保证下面这下的语义确定
+      await tap(from); await sleep(220);
+      if (await selIndex() !== from) { await sleep(400); continue; }
+      await tap(to);
+      if (await E.wait(() => moveCount() === expect, 4000)) return true;
+    }
+    return false;
+  };
+  check("红方走出第一手（炮 7,1 -> 5,1）", await play(64, 46, 1));
+  E.send({ t: "game.move", from: 27, to: 36 });                           // 黑：卒 3,0 -> 4,0
+  await E.wait(() => moveCount() === 2, 6000);
+  check("红方走出第二手（炮 5,1 -> 5,4 将军）", await play(46, 49, 3));
+  await waitDom(A, "!!document.querySelector('.xq-fx')", 5000);
   const fx = await A.js("(function(){var n=document.querySelector('.xq-fx');if(!n)return 'MISS';"
     + "var w=document.querySelector('.xq-word');return JSON.stringify({label:w?w.textContent:'',anim:getComputedStyle(w).animationName,"
     + "cls:n.className});})()");

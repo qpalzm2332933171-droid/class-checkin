@@ -1,12 +1,33 @@
 import {
-  defineView, registerRoute, ref, computed, onMounted, onUnmounted, nextTick, navigate, store, api, toast, haptic,
+  defineView, registerRoute, ref, computed, watch, onMounted, onUnmounted, nextTick, navigate, store, api, toast, haptic,
   confirmDialog, registerSwipe, deviceLocation, pillStyle, onWs, mediaUrl,
 } from "../ui.js";
 import { createMapPicker } from "../mapkit.js";
+import { isSuper as isSuperUser, isManager as isManagerUser, isStaff as isStaffFn,
+         roleLabelOf, roleOptions, classNameOf } from "../roles.js";
 
+/* 签到时间点的偏好只存在本机（localStorage），不同人可以有不同的一套 */
+const SIGN_TIMES_KEY = "checkin_sign_times";
+
+function readLocalSignTimes() {
+  try {
+    const raw = localStorage.getItem(SIGN_TIMES_KEY);
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return null;
+    const clean = arr.filter((t) => typeof t === "string" && /^\d{2}:\d{2}$/.test(t));
+    return clean.length ? clean : null;
+  } catch (err) { return null; }
+}
+
+function writeLocalSignTimes(list) {
+  try { localStorage.setItem(SIGN_TIMES_KEY, JSON.stringify(list || [])); } catch (err) { /* ignore */ }
+}
+
+/* manageOnly = 总管理员 + 管理员(xx班)；adminOnly = 只有总管理员 */
 const TABS = [
   { id: "overview", label: "概览" },
-  { id: "users", label: "成员", adminOnly: true },
+  { id: "users", label: "成员", manageOnly: true },
   { id: "sessions", label: "场次" },
   { id: "records", label: "记录" },
   { id: "posts", label: "讨论" },
@@ -37,12 +58,23 @@ registerRoute("/admin", defineView("admin", {
     <header class="head row gap3">
       <div class="grow">
         <h1 class="t1">管理后台</h1>
-        <p class="sub">{{ store.user?.name }} · {{ isAdmin ? '管理员（最高权限）' : '资委' }}</p>
+        <p class="sub">{{ store.user?.name }} · {{ myRoleLabel }}</p>
       </div>
       <button class="btn btn-icon glass glass-thin" :class="{ spin: loading }" @click="refresh">
         <Icon n="refresh" :size="19" />
       </button>
     </header>
+
+    <!-- 总管理员专属：选择要查看的班级（某个班 / 未指定班级 / 全体） -->
+    <div v-if="isAdmin" class="class-bar" data-no-swipe>
+      <Icon n="shield" :size="17" />
+      <select class="field class-select" v-model="classFilter" @change="onScopeChange">
+        <option value="all">全体（所有班级）</option>
+        <option value="0">未指定班级</option>
+        <option v-for="c in classes" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
+      </select>
+    </div>
+    <p v-else-if="myClassName" class="cap mt3">只看得到 {{ myClassName }} 的数据</p>
 
     <div class="ad-segs glass glass-thin" ref="segEl" data-no-swipe>
       <span class="seg-pill" :style="pill" aria-hidden="true"></span>
@@ -93,17 +125,38 @@ registerRoute("/admin", defineView("admin", {
           <b class="num">{{ server.disk_percent || 0 }}%</b>
         </div>
         <div class="ad-meter"><i :style="{ width: (server.disk_percent || 0) + '%', background: barColor(server.disk_percent) }"></i></div>
+        <template v-if="!net.net_unsupported">
+          <div class="ad-mrow mt3">
+            <span>带宽 ↓{{ bps(net.net_rx_bps) }} / ↑{{ bps(net.net_tx_bps) }}（上限 {{ net.net_cap_mbps }}Mbps）</span>
+            <b class="num">{{ net.net_percent || 0 }}%</b>
+          </div>
+          <div class="ad-meter"><i :style="{ width: Math.min(100, net.net_percent || 0) + '%', background: barColor(net.net_percent) }"></i></div>
+          <p class="cap mt2">实时总占用 {{ bps(net.net_total_bps) }} · 峰值 {{ bps(net.net_peak_bps) }} · 累计出 {{ netSize(net.net_tx_total) }}</p>
+        </template>
       </div>
 
-      <h2 class="section-title">在线同学</h2>
+      <h2 class="section-title">在线同学 <span class="cap">{{ online }} 人</span></h2>
       <div class="glass glass-thin ad-card ad-wrap" data-ok-wrap>
-        <span v-for="n in onlineUsers" :key="n" class="chip chip-green">{{ n }}</span>
+        <span v-for="p in onlinePeople" :key="p[0]" class="chip chip-green chip-online">
+          <span class="avatar" :style="{ background: p[2] ? '' : 'var(--accent)' }">
+            <img v-if="p[2]" :src="mediaUrl(p[2])" :alt="p[1]" loading="lazy" />
+            <template v-else>{{ (p[1] || '?').slice(0, 1) }}</template>
+          </span>
+          {{ p[1] }}<span v-if="p[4]" class="cap">{{ p[4] }}</span>
+        </span>
         <span v-if="!onlineUsers.length" class="sub">当前没人挂着</span>
       </div>
 
       <h2 class="section-title">快捷公告</h2>
       <div class="glass glass-thin ad-card">
-        <textarea class="field ad-area" v-model="announceText" maxlength="500" rows="3" placeholder="写下要通知全班的事，所有人会立刻收到"></textarea>
+        <div v-if="isAdmin" class="row gap3">
+          <select class="field grow" v-model="announceClass">
+            <option value="0">全体（所有班级）</option>
+            <option v-for="c in classes" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
+          </select>
+        </div>
+        <textarea class="field ad-area" :class="{ mt3: isAdmin }" v-model="announceText" maxlength="500" rows="3"
+                  :placeholder="isAdmin && announceClass === '0' ? '写下要通知所有人的事' : '写下要通知这个班的事，他们会立刻收到'"></textarea>
         <button class="btn btn-primary btn-block mt4" :disabled="busy || !announceText.trim()" @click="sendAnnounce">
           <Icon n="bell" :size="18" /> 发布公告
         </button>
@@ -112,7 +165,7 @@ registerRoute("/admin", defineView("admin", {
 
     <!-- ------------------------------------------------------------- users -->
     <template v-else-if="p.id === 'users'">
-      <div class="glass glass-thin ad-card mt4">
+      <div v-if="isAdmin" class="glass glass-thin ad-card mt4">
         <div class="row gap3">
           <input class="field grow" v-model="newUser.username" placeholder="用户名 (登录用)" />
           <input class="field grow" v-model="newUser.name" placeholder="昵称" />
@@ -120,16 +173,18 @@ registerRoute("/admin", defineView("admin", {
         <div class="row gap3 mt3">
           <input class="field grow" v-model="newUser.password" placeholder="密码（留空自动生成）" />
           <select class="field" v-model="newUser.role">
-            <option value="member">普通成员</option>
-            <option value="committee">资委</option>
-            <option value="study">学委</option>
-            <option value="admin">管理员</option>
+            <option v-for="o in roleChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
         </div>
+        <select class="field mt3" v-model="newUser.class_id">
+          <option :value="0">未指定班级</option>
+          <option v-for="c in classes" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
         <button class="btn btn-primary btn-block mt4" :disabled="busy || newUser.username.trim().length < 2" @click="createUser">
           <Icon n="plus" :size="18" /> 新建账号
         </button>
       </div>
+      <p v-else class="cap mt4">你只能管理 {{ myClassName || '本班' }} 的成员，新建账号请联系总管理员。</p>
 
       <div class="glass glass-thin list mt4">
         <div v-for="u in users" :key="u.id" class="ad-row">
@@ -140,13 +195,17 @@ registerRoute("/admin", defineView("admin", {
             </span>
             <div class="grow">
               <p class="row-title">{{ u.name }}
-                <span class="chip chip-accent" v-if="u.role === 'admin'">管理员</span>
+                <span class="chip chip-accent" v-if="u.role === 'admin'">总管理员</span>
+                <span class="chip chip-accent" v-else-if="u.role === 'class_admin'">管理员（班级）</span>
                 <span class="chip chip-orange" v-else-if="u.role === 'committee'">资委</span>
                 <span class="chip chip-orange" v-else-if="u.role === 'study'">学委</span>
                 <span class="chip chip-red" v-if="u.banned">封禁</span>
                 <span class="chip chip-orange" v-if="u.muted">禁言</span>
               </p>
-              <p class="cap">@{{ u.username }} · 签到 {{ u.checked }} 次</p>
+              <p class="cap">
+                @{{ u.username }} · 签到 {{ u.checked }} 次 ·
+                <span :class="{ 'class-tag': !!u.class_id, 'class-tag public': !u.class_id }">{{ u.class_name || '未指定班级' }}</span>
+              </p>
             </div>
             <Icon n="back" :size="16" class="ad-chev" />
           </div>
@@ -157,13 +216,14 @@ registerRoute("/admin", defineView("admin", {
             </div>
             <div class="row gap3 mt3">
               <select class="field grow" v-model="draft.role">
-                <option value="member">普通成员</option>
-                <option value="committee">资委</option>
-                <option value="study">学委</option>
-                <option value="admin">管理员</option>
+                <option v-for="o in roleChoices" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
               <input class="field grow" v-model="draft.password" placeholder="重设密码（可留空）" />
             </div>
+            <select v-if="isAdmin" class="field mt3" v-model="draft.class_id">
+              <option :value="0">未指定班级</option>
+              <option v-for="c in classes" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
             <div class="row gap3 mt3 wrap">
               <button class="btn" :class="draft.banned ? 'btn-danger' : ''" @click="draft.banned = !draft.banned">
                 {{ draft.banned ? "已封禁" : "封禁账号" }}
@@ -186,6 +246,14 @@ registerRoute("/admin", defineView("admin", {
     <template v-else-if="p.id === 'sessions'">
       <div class="glass glass-thin ad-card mt4">
         <input class="field" v-model="newSession.title" placeholder="场次名称，如 周三上午第一节课" />
+
+        <template v-if="isAdmin">
+          <label class="label mt4">面向班级</label>
+          <select class="field" v-model="sessionClass">
+            <option value="0">全体（所有班级都能看到）</option>
+            <option v-for="c in classes" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
+          </select>
+        </template>
 
         <label class="label mt4">签到时间</label>
         <div class="ad-times">
@@ -277,6 +345,7 @@ registerRoute("/admin", defineView("admin", {
               <p class="row-title">
                 {{ s.title }}
                 <span class="chip" :class="s.status === 'open' ? 'chip-green' : 'chip-red'">{{ s.status === "open" ? "进行中" : "已关闭" }}</span>
+                <span v-if="isAdmin" class="chip class-tag" :class="{ public: !s.class_id }">{{ s.class_name || '全体' }}</span>
               </p>
               <p class="cap">口令 {{ s.code }} · {{ s.present }}/{{ s.total }} 人 · {{ stamp(s.starts_at) }}</p>
             </div>
@@ -415,7 +484,7 @@ registerRoute("/admin", defineView("admin", {
               · 真实身份 {{ p.author }} · {{ stamp(p.created_at) }}
             </p>
           </div>
-          <button v-if="isAdmin" class="btn btn-icon" :title="p.deleted ? '恢复' : '删除'" @click="togglePost(p)">
+          <button v-if="canManage" class="btn btn-icon" :title="p.deleted ? '恢复' : '删除'" @click="togglePost(p)">
             <Icon :n="p.deleted ? 'refresh' : 'trash'" :size="16" />
           </button>
         </div>
@@ -427,7 +496,8 @@ registerRoute("/admin", defineView("admin", {
     <template v-else-if="p.id === 'signset'">
       <div class="glass glass-thin ad-card mt4">
         <label class="label">固定签到时间点</label>
-        <p class="sub mt2">同学发布签到时可以直接挑这些时间点，也可以用自定义时间。</p>
+        <p class="sub mt2">同学发布签到时可以直接挑这些时间点，也可以用自定义时间。
+          <b>这套时间只存在本机</b>，改完立刻生效，不会影响别人。</p>
         <div class="ad-times mt3">
           <span v-for="(t, i) in signTimes" :key="t + i" class="chip chip-accent">
             {{ t }}
@@ -441,14 +511,42 @@ registerRoute("/admin", defineView("admin", {
         </div>
         <label class="label mt4">默认补签时长（分钟）</label>
         <input class="field" type="number" v-model.number="graceDraft" />
-        <p class="cap mt2">签到时间之后这段时间内仍可签到，记为迟到。</p>
+        <p class="cap mt2">签到时间之后这段时间内仍可签到，记为迟到。这一项对所有人生效。</p>
         <button class="btn btn-primary btn-block mt4" :disabled="busy" @click="saveSignSettings">保存签到设置</button>
       </div>
     </template>
 
     <!-- ---------------------------------------------------------- settings -->
     <template v-else-if="p.id === 'settings'">
-      <div class="glass glass-thin ad-card mt4">
+      <h2 class="section-title mt4">班级管理</h2>
+      <div class="glass glass-thin ad-card">
+        <p class="sub">新增 / 重命名 / 删除班级。成员的班级在「成员」页里分配。</p>
+        <div class="row gap3 mt3">
+          <input class="field grow" v-model="newClass.name" placeholder="班级名称，如 人工智能启明实验2502班" maxlength="30" />
+          <button class="btn btn-primary" :disabled="busy || !newClass.name.trim()" @click="createClass">新增</button>
+        </div>
+        <input class="field mt3" v-model="newClass.note" placeholder="备注（可留空，如 班主任 / 年级）" maxlength="60" />
+        <div class="mt4">
+          <div v-for="c in classes" :key="c.id" class="cls-row">
+            <span class="cls-dot"></span>
+            <div class="grow">
+              <p class="cls-name">{{ c.name }}</p>
+              <p class="cls-meta">{{ c.members }} 名成员 · {{ c.sessions }} 个场次<template v-if="c.note"> · {{ c.note }}</template></p>
+              <div v-if="classEditing === c.id" class="row gap3 mt3">
+                <input class="field grow" v-model="classDraft.name" placeholder="班级名称" maxlength="30" />
+                <input class="field grow" v-model="classDraft.note" placeholder="备注" maxlength="60" />
+              </div>
+            </div>
+            <button v-if="classEditing === c.id" class="btn btn-sm btn-primary" @click="saveClass(c)">保存</button>
+            <button v-else class="btn btn-sm" @click="editClass(c)">改名</button>
+            <button class="btn btn-sm btn-danger" @click="removeClass(c)"><Icon n="trash" :size="15" /></button>
+          </div>
+          <p v-if="!classes.length" class="sub">还没有班级，先在上面新建一个吧。</p>
+        </div>
+      </div>
+
+      <h2 class="section-title">站点设置</h2>
+      <div class="glass glass-thin ad-card">
         <label class="label">站点名称</label>
         <input class="field" v-model="settings.site_name" />
         <label class="label mt4">副标题</label>
@@ -629,15 +727,32 @@ registerRoute("/admin", defineView("admin", {
     const sql = ref("");
     const sqlConfirm = ref(false);
     const sqlResult = ref("");
-    const newUser = ref({ username: "", name: "", password: "", role: "member" });
+    const newUser = ref({ username: "", name: "", password: "", role: "member", class_id: 0 });
     const newSession = ref({ title: "", sign_at: "08:00", grace_minutes: 15, code: "",
                              require_note: false, allow_leave: true, require_location: false,
                              lat: 0, lng: 0, radius: 200, place: "" });
     const upload = ref({ version_name: "", notes: "", version_code: 0 });
 
     const toggles = SETTING_TOGGLES;
-    const isAdmin = computed(() => !!(store.user && store.user.role === "admin"));
-    const tabs = computed(() => TABS.filter((t) => isAdmin.value || !t.adminOnly));
+    const isAdmin = computed(() => isSuperUser(store.user));        // 总管理员
+    const canManage = computed(() => isManagerUser(store.user));    // 总管理员 / 管理员(xx班)
+    const isClassAdmin = computed(() => canManage.value && !isAdmin.value);
+    /* 资委/学委也能进管理台，只是能看的东西少；refresh() 要靠它判断"该不该把人赶回我的页" */
+    const isStaffUser = computed(() => isStaffFn(store.user));
+    const tabs = computed(() => TABS.filter(
+      (t) => (!t.adminOnly || isAdmin.value) && (!t.manageOnly || canManage.value)));
+    const myRoleLabel = computed(() => roleLabelOf(store.user));
+    const myClassName = computed(() => (store.user && store.user.class_name) || "");
+    const classes = ref([]);
+    const classFilter = ref("all");
+    const newClass = ref({ name: "", note: "" });
+    const classEditing = ref(0);
+    const classDraft = ref({ name: "", note: "" });
+    const announceClass = ref("0");
+    const sessionClass = ref("0");
+    const net = ref({});
+    const onlinePeople = ref([]);
+    const roleChoices = computed(() => roleOptions(isAdmin.value));
     const signTimes = ref([]);
     const newTime = ref("");
     const graceDraft = ref(15);
@@ -662,10 +777,82 @@ registerRoute("/admin", defineView("admin", {
     });
     const fileSize = computed(() => sizeOf(uploadFile.value ? uploadFile.value.size : 0));
 
+    /* 总管理员可以用 ?class= 选范围，其他人后端一律钉在自己班，传了也没用 */
+    function scopeQ(extra = "") {
+      if (!isAdmin.value) return extra;
+      const piece = "class=" + encodeURIComponent(classFilter.value || "all");
+      return extra ? extra + "&" + piece : piece;
+    }
+
+    async function onScopeChange() {
+      haptic(6);
+      await refresh();
+    }
+
+    async function loadClasses() {
+      try {
+        const data = await api("/api/classes");
+        classes.value = data.classes || [];
+      } catch (err) { classes.value = []; }
+    }
+
+    async function createClass() {
+      const name = (newClass.value.name || "").trim();
+      if (!name) return;
+      await guard(async () => {
+        await api("/api/classes", { method: "POST", body: { name: name, note: newClass.value.note } });
+        toast("班级已创建", "success");
+        newClass.value = { name: "", note: "" };
+        await loadClasses();
+      });
+    }
+
+    function editClass(c) {
+      classEditing.value = classEditing.value === c.id ? 0 : c.id;
+      classDraft.value = { name: c.name, note: c.note || "" };
+      haptic(6);
+    }
+
+    async function saveClass(c) {
+      await guard(async () => {
+        await api("/api/classes/" + c.id, { method: "PATCH", body: classDraft.value });
+        toast("已保存", "success");
+        classEditing.value = 0;
+        await loadClasses();
+      });
+    }
+
+    async function removeClass(c) {
+      const yes = await confirmDialog(
+        "删除班级「" + c.name + "」？班里的 " + c.members + " 名成员会变成「未指定班级」，该班的签到会变成全体可见。",
+        { okText: "删除班级", danger: true });
+      if (!yes) return;
+      await guard(async () => {
+        await api("/api/classes/" + c.id, { method: "DELETE" });
+        toast("班级已删除", "success");
+        if (classFilter.value === String(c.id)) classFilter.value = "all";
+        await loadClasses();
+        await refresh();
+      });
+    }
+
     function barColor(p) {
       if (p >= 85) return "var(--red)";
       if (p >= 65) return "var(--orange)";
       return "linear-gradient(90deg, var(--accent), var(--green))";
+    }
+    /* 带宽：字节/秒 -> 好读的单位 */
+    function bps(value) {
+      const n = Number(value || 0);
+      if (n < 1024) return n.toFixed(0) + " B/s";
+      if (n < 1048576) return (n / 1024).toFixed(1) + " KB/s";
+      return (n / 1048576).toFixed(2) + " MB/s";
+    }
+    function netSize(bytes) {
+      const n = Number(bytes || 0);
+      if (n < 1048576) return (n / 1024).toFixed(0) + "KB";
+      if (n < 1073741824) return (n / 1048576).toFixed(1) + "MB";
+      return (n / 1073741824).toFixed(2) + "GB";
     }
     function sizeOf(bytes) {
       const n = Number(bytes || 0);
@@ -693,19 +880,28 @@ registerRoute("/admin", defineView("admin", {
     }
 
     async function loadOverview() {
-      const data = await api("/api/admin/overview");
+      const data = await api("/api/admin/overview", { query: scopeQ() });
       overview.value = data;
       server.value = data.server || {};
       online.value = data.online || 0;
       onlineUsers.value = data.online_users || [];
+      onlinePeople.value = data.online_people || [];
+      net.value = data.net || {};
+      if (data.classes) classes.value = data.classes;
       settings.value = { ...data.settings };
       syncSignSettings();
     }
 
     function syncSignSettings() {
-      const raw = settings.value.sign_times || "";
-      signTimes.value = String(raw).split(",").map((t) => t.trim()).filter(Boolean);
-      graceDraft.value = Number(settings.value.default_grace || 15);
+      /* 时间点优先用本机偏好；本机没存过就拿服务端的默认值当种子 */
+      const local = readLocalSignTimes();
+      if (local) {
+        signTimes.value = local;
+      } else {
+        const raw = settings.value.sign_times || store.settings.sign_times || "08:00,10:10,14:30,16:25,19:00";
+        signTimes.value = String(raw).split(",").map((t) => t.trim()).filter(Boolean);
+      }
+      graceDraft.value = Number(settings.value.default_grace || store.settings.default_grace || 15);
       if (!newSession.value.sign_at && signTimes.value.length) newSession.value.sign_at = signTimes.value[0];
     }
 
@@ -871,34 +1067,38 @@ registerRoute("/admin", defineView("admin", {
       if (!signTimes.value.includes(value)) signTimes.value.push(value);
       signTimes.value.sort();
       newTime.value = "";
+      writeLocalSignTimes(signTimes.value);
       haptic(6);
     }
     function removeTime(index) {
       signTimes.value.splice(index, 1);
+      writeLocalSignTimes(signTimes.value);
       haptic(6);
     }
 
     async function saveSignSettings() {
+      /* 时间点是本机偏好，不写服务器；补签时长影响所有人签到，留在服务端 */
+      writeLocalSignTimes(signTimes.value);
       await guard(async () => {
-        const res = await api("/api/admin/sign-settings", { method: "PATCH", body: {
-          sign_times: signTimes.value.join(","), default_grace: graceDraft.value } });
+        const res = await api("/api/admin/sign-settings", {
+          method: "PATCH", body: { default_grace: graceDraft.value } });
         settings.value = { ...settings.value, ...res.settings };
         store.settings = { ...store.settings, ...res.settings };
-        syncSignSettings();
-        toast("签到设置已保存", "success");
+        graceDraft.value = Number(settings.value.default_grace || graceDraft.value);
+        toast("签到设置已保存（时间点只在本机生效）", "success");
       });
     }
     async function loadUsers() {
-      const data = await api("/api/admin/users");
+      const data = await api("/api/admin/users", { query: scopeQ() });
       users.value = data.users || [];
     }
     async function loadSessions() {
-      const data = await api("/api/admin/sign-sessions");
+      const data = await api("/api/admin/sign-sessions", { query: scopeQ() });
       sessions.value = data.sessions || [];
     }
     async function loadRoster() {
       if (!rosterSession.value) return;
-      const data = await api("/api/admin/session-roster", { query: "session_id=" + rosterSession.value.id });
+      const data = await api("/api/admin/session-roster", { query: scopeQ("session_id=" + rosterSession.value.id) });
       roster.value = data.roster || [];
       rosterCounts.value = data.counts || {};
       if (data.session) rosterSession.value = data.session;
@@ -918,9 +1118,12 @@ registerRoute("/admin", defineView("admin", {
 
     async function refresh() {
       /* 非管理员/资委误入本页（例如换账号后残留 #/admin）时退回"我的" */
-      if (!store.user || !["admin", "committee", "study"].includes(store.user.role)) { navigate("/me", true); return; }
+      /* 刚刷新时 store.user 还没回来，别急着把人赶走 */
+      if (!store.user) return;
+      if (!canManage.value && !isStaffUser.value) { navigate("/me", true); return; }
       loading.value = true;
       try {
+        if (!classes.value.length) await loadClasses();
         if (tab.value === "overview") await loadOverview();
         else if (tab.value === "users") { await loadUsers(); await loadOverview(); }
         else if (tab.value === "sessions") await loadSessions();
@@ -1091,15 +1294,17 @@ registerRoute("/admin", defineView("admin", {
     function toggleEdit(id) {
       editing.value = editing.value === id ? 0 : id;
       const u = users.value.find((x) => x.id === id);
-      if (u) draft.value = { name: u.name, note: u.note || "", role: u.role, banned: !!u.banned, muted: !!u.muted, password: "" };
+      if (u) draft.value = { name: u.name, note: u.note || "", role: u.role, banned: !!u.banned, muted: !!u.muted,
+                             password: "", class_id: Number(u.class_id || 0) };
       haptic(6);
     }
 
     async function createUser() {
       await guard(async () => {
-        const res = await api("/api/admin/users", { method: "POST", body: newUser.value });
+        const body = { ...newUser.value, class_id: Number(newUser.value.class_id || 0) };
+        const res = await api("/api/admin/users", { method: "POST", body: body });
         toast("已创建，初始密码：" + res.password, "success", 7000);
-        newUser.value = { username: "", name: "", password: "", role: "member" };
+        newUser.value = { username: "", name: "", password: "", role: "member", class_id: Number(classFilter.value) > 0 ? classFilter.value : 0 };
         await loadUsers();
       });
     }
@@ -1139,7 +1344,9 @@ registerRoute("/admin", defineView("admin", {
         return;
       }
       await guard(async () => {
-        const res = await api("/api/admin/sign-sessions", { method: "POST", body: newSession.value });
+        const body = { ...newSession.value };
+        if (isAdmin.value) body.class_id = Number(sessionClass.value || 0);
+        const res = await api("/api/admin/sign-sessions", { method: "POST", body: body });
         toast("场次已开启，口令 " + res.code, "success", 6000);
         newSession.value = { title: "", sign_at: signTimes.value[0] || "08:00",
                              grace_minutes: graceDraft.value, code: "", require_note: false,
@@ -1218,7 +1425,7 @@ registerRoute("/admin", defineView("admin", {
     async function exportRecords(sid) {
       try {
         toast("正在生成 Excel…", "info", 1600);
-        const resp = await api("/api/admin/records.xlsx" + (sid ? "?session_id=" + sid : ""), { raw: true });
+        const resp = await api("/api/admin/records.xlsx", { query: scopeQ(sid ? "session_id=" + sid : ""), raw: true });
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -1270,7 +1477,9 @@ registerRoute("/admin", defineView("admin", {
 
     async function sendAnnounce() {
       await guard(async () => {
-        await api("/api/admin/announce", { method: "POST", body: { content: announceText.value } });
+        const body = { content: announceText.value };
+        if (isAdmin.value) body.class_id = Number(announceClass.value || 0);
+        await api("/api/admin/announce", { method: "POST", body: body });
         announceText.value = "";
         toast("公告已发送", "success");
         haptic([10, 40, 10]);
@@ -1341,6 +1550,12 @@ registerRoute("/admin", defineView("admin", {
 
     onMounted(refresh);
 
+    /* 冷启动时 onMounted 可能早于 /api/me，等用户回来了再真正拉一次数据 */
+    let bootedFor = 0;
+    watch(() => (store.user && store.user.id) || 0, (id) => {
+      if (id && id !== bootedFor) { bootedFor = id; refresh(); }
+    }, { immediate: true });
+
     let stopSwipe = null;
     let stopAvatar = null;
     onMounted(() => {
@@ -1374,7 +1589,11 @@ registerRoute("/admin", defineView("admin", {
              segEl, stageEl, pill, paneAnim, panes, paneStyle,
              posts, logs, versions, settings, editing, openSession, draft, sDraft,
              announceText, uploadFile, fileInput, sql, sqlConfirm, sqlResult, newUser, newSession, upload,
-             loadPercent, fileSize, barColor, sizeOf, stamp, percent, isAdmin, signTimes, newTime, graceDraft,
+             loadPercent, fileSize, barColor, sizeOf, stamp, percent, isAdmin, canManage, isClassAdmin, isStaffUser,
+             signTimes, newTime, graceDraft,
+             classes, classFilter, newClass, classEditing, classDraft, announceClass, sessionClass, net, onlinePeople,
+             roleChoices, myRoleLabel, myClassName, createClass, editClass, saveClass, removeClass, onScopeChange,
+             bps, netSize, classNameOf, mediaUrl,
              mapEl, locating, pickedCoord, customTime, placeQuery, placeBusy, placeList, placeListTitle,
              RADIUS_PRESETS, searchPlaces, pickPlace, fmtDistance, setRadius,
              refresh, go, step, toggleEdit, createUser, saveUser, resetPassword, removeUser, createSession,
