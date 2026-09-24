@@ -43,8 +43,47 @@ def check(name, ok, extra=""):
 
 
 # ---------------------------------------------------------------- 加速旋钮
-def set_speed(speed):
-    os.environ.setdefault("CHECKIN_DATA", "/opt/class-checkin/data")
+def _resolve_data_dir(users):
+    """定位"服务端真正在用的那个库"。
+
+    坑（踩过一次）：db.py 按 CHECKIN_DATA 找库，测试进程里没有这个变量就会落到
+    server/data/app.db；而本地开发时服务端通常跑在 class-checkin/data。
+    写错库不会报任何错 —— 只是加速旋钮静默失效，整局按原速跑，
+    测试于是以"超时"的形式假失败，排查半天才发现跟被测代码无关。
+
+    所以这里按候选路径挑一个"确实装着本次测试全部账号"的库；
+    一个都挑不出来就直接报错说清楚，不猜。
+    """
+    import sqlite3
+    here = os.path.dirname(os.path.abspath(__file__))
+    cands = []
+    if os.environ.get("CHECKIN_DATA"):
+        cands.append(os.environ["CHECKIN_DATA"])
+    cands.append(os.path.join(here, "..", "server", "data"))
+    cands.append(os.path.join(here, "..", "data"))
+    marks = ",".join("?" * len(users))
+    for d in cands:
+        path = os.path.join(d, "app.db")
+        if not os.path.isfile(path):
+            continue
+        try:
+            con = sqlite3.connect(path)
+            hit = con.execute(
+                "SELECT COUNT(*) FROM users WHERE username IN (%s)" % marks,
+                list(users)).fetchone()[0]
+            con.close()
+        except Exception:
+            continue
+        if hit == len(users):
+            return os.path.abspath(d)
+    sys.exit("找不到服务端真正在用的数据库（试过：%s）。\n"
+             "请把 CHECKIN_DATA 指到服务端的数据目录后重跑，例如：\n"
+             '  $env:CHECKIN_DATA="D:\\learn\\class-checkin\\data"'
+             % "、".join(cands))
+
+
+def set_speed(speed, users):
+    os.environ["CHECKIN_DATA"] = _resolve_data_dir(users)
     import db
     db.init()
     old = db.setting("liar_speed", "1")
@@ -53,7 +92,6 @@ def set_speed(speed):
 
 
 def restore_speed(old):
-    os.environ.setdefault("CHECKIN_DATA", "/opt/class-checkin/data")
     import db
     if old in ("", None):
         db.execute("DELETE FROM settings WHERE k = ?", ("liar_speed",))
@@ -123,7 +161,7 @@ def main():
     uids = [whoami(t) for t in tokens]
 
     # 开牌展示期本来 7 秒，整局跑完太慢；回合给 5 秒，够客户端反应也够验证超时兜底
-    old_speed = set_speed(5)
+    old_speed = set_speed(5, [a.split(":", 1)[0] for a in accs])
 
     conns = [Pumped(t) for t in tokens]
     conn_of = {u: c for u, c in zip(uids, conns)}
