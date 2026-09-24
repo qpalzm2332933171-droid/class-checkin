@@ -333,6 +333,10 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
       return need;
     });
     const myAliveWin = computed(() => finished.value && (roomApi.winners.value || []).includes(myId.value));
+    /* tools/check_view_template_vars.mjs 抓出来的：模板引用了但 setup 没导出。
+       生产版 Vue 不报错，只是静默渲染成空 —— 结算页"为什么赢/输"那行一直是空白。 */
+    const mySeat = computed(() => seatOf(myId.value) || "?");
+    const resultReason = computed(() => roomApi.reason.value || "对局结束");
 
     function nameOf(uid) { return (state.value.names || {})[String(uid)] || "同学"; }
     function seatOf(uid) {
@@ -432,6 +436,6 @@ registerRoute("/games/werewolf", defineView("gameWerewolf", {
              isNight, phaseTitle, stepText, remaining, voteResult, myAction, actionTitle, actionHint,
              confirmText, allowEmpty, myAliveWin, myTeamOfWinner, waitingShort,
              nameOf, seatOf, avatarOf, iconOf, hasVoted, canPick, pick, confirm, witch, sendChat, mediaUrl, store,
-             seatOrder };
+             seatOrder, mySeat, resultReason };
   },
 }));

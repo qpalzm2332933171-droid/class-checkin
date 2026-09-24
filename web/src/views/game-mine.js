@@ -318,7 +318,7 @@ registerRoute("/games/mine", defineView("gameMine", {
 
     onMounted(reset);
     onUnmounted(() => { clearInterval(timer); pressClear(); });
-    return { cells, state, flags, elapsed, diff, difficulties, picker, size, mineTotal, hintEnabled,
+    return { cells, mode, state, flags, elapsed, diff, difficulties, picker, size, mineTotal, hintEnabled,
              boardStyle, cellClass, reveal, toggleFlag, contextFlag,
              pressStart, pressMove, pressEnd, pressCancel: pressClear, reset, hint, choose, navigate };
   },
