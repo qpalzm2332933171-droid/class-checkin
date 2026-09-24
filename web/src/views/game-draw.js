@@ -27,7 +27,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
       <button class="btn glass glass-thin code-btn" @click="copyCode">{{ roomCode }}</button>
     </header>
 
-    <div class="glass glass-thick glass-liquid gd-wordbar mt4">
+    <div v-if="room && room.started" class="glass glass-thick glass-liquid gd-wordbar mt4">
       <div class="grow">
         <p class="cap">{{ isDrawer ? "你来画" : (solvedByMe ? "已猜中，等待本轮结束" : "猜这个词") }}</p>
         <h2 class="gd-word">{{ isDrawer ? (state.word || "") : (state.masked || "…") }}</h2>
@@ -97,17 +97,9 @@ registerRoute("/games/draw", defineView("gameDraw", {
         </div>
         <p v-if="!feed.length" class="cap gd-feed-empty">还没有人说话，猜中的词会打码成 ***</p>
       </div>
-      <form class="gd-composer" @submit.prevent="send">
-        <input class="field" v-model="draft" :disabled="isDrawer || !playing" maxlength="40"
-               :placeholder="isDrawer ? '你是画手，专心画啦' : (isSpectator ? '观战发言（会变成弹幕）' : '输入你猜的词')"
-               enterkeyhint="send" />
-        <button class="btn btn-primary btn-icon btn-lg" type="submit" :disabled="isDrawer || !playing || !draft.trim()">
-          <Icon n="send" :size="19" />
-        </button>
-      </form>
     </section>
 
-    <section class="gd-rank mt4">
+    <section v-if="room && room.started" class="gd-rank mt4">
       <button class="gd-rank-head glass glass-thin" @click="toggleRank">
         <Icon n="chart" :size="16" />
         <b class="grow">本场积分排名</b>
@@ -129,6 +121,16 @@ registerRoute("/games/draw", defineView("gameDraw", {
         </div>
       </Transition>
     </section>
+
+    <div class="gd-bar-spacer"></div>
+    <form class="gd-composer glass glass-thick" @submit.prevent="send">
+      <input class="field" v-model="draft" :disabled="isDrawer || !playing" maxlength="40"
+             :placeholder="isDrawer ? '你是画手，专心画啦' : (isSpectator ? '观战发言（会变成弹幕）' : '输入你猜的词')"
+             enterkeyhint="send" />
+      <button class="btn btn-primary btn-icon btn-lg" type="submit" :disabled="isDrawer || !playing || !draft.trim()">
+        <Icon n="send" :size="19" />
+      </button>
+    </form>
 
     <div v-if="notice" class="rematch-bar mt4" :class="{ want: othersWantRematch }">{{ notice }}</div>
 
@@ -191,7 +193,14 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-frow b { color: var(--ink-2); font-weight: 600; flex: none; }
   .gd-frow.me b { color: var(--accent); }
   .gd-frow.ok { color: var(--green); }
-  .gd-composer { display: flex; gap: 10px; margin-top: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--hair); }
+  /* 底部固定输入条。留白 132px 同时避开固定条（约 74px）和它上面的「讨论」悬浮球
+     （.mc-fab 在 safe-b + 78px、高约 50px），否则聊天最后几行会被盖住。
+     数值和 game-liar.js 的 .liar-bar-spacer 保持一致。 */
+  .gd-bar-spacer { height: 132px; }
+  .gd-composer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    display: flex; gap: 10px;
+    padding: var(--s3) var(--s4) calc(var(--s3) + var(--safe-b));
+    border-radius: var(--r-xl) var(--r-xl) 0 0; }
   .gd-composer .field { flex: 1; }
   .gd-rank-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px var(--s4);
     border-radius: var(--r-lg); text-align: left; }
@@ -200,7 +209,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     transition: transform var(--dur-med) var(--ease-out); transform: rotate(-90deg); }
   .gd-caret.open { transform: rotate(90deg); }
   .gd-rank .list { padding: 4px var(--s3); }
-  .gd-overlay { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + var(--s6));
+  .gd-overlay { position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(var(--safe-b) + 90px);      
     padding: var(--s5); border-radius: var(--r-xl); text-align: center; width: min(90vw, 400px); z-index: 30; }
   `,
   setup() {
