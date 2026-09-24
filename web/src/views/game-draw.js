@@ -66,7 +66,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
           </button>
           <span class="gd-div"></span>
           <button v-for="(s, i) in activeSizes" :key="s" class="gd-sz"
-                  :class="{ on: activeSize === s && !eraser }"
+                  :class="{ on: activeSize === s }"
                   @click="pickSize(s)">
             <i :style="{ width: activeDots[i] + 'px', height: activeDots[i] + 'px' }"></i>
           </button>
@@ -172,7 +172,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-sw { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
   .gd-sw.on { border-color: var(--ink); transform: scale(1.12); }
   .gd-sz { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 50%; }
-  .gd-sz.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .gd-sz.on { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+  .gd-sz on i { background: var(--accent); }
   .gd-sz i { display: block; border-radius: 50%; background: var(--ink); }
   .gd-tool { height: 30px; min-width: 30px; flex: none; padding: 0 5px; display: grid; place-items: center;
     border-radius: 15px; color: var(--ink-2); }
