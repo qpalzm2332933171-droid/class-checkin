@@ -63,14 +63,14 @@ export const MatchChat = {
   },
   template: `
   <div class="mc" v-if="roomInfo">
-    <button v-if="!open" class="mc-fab glass glass-thick" :class="{ 'mc-live': live }" @click="toggle">
+    <button v-if="!open" class="mc-fab glass glass-thick glass-live" :class="{ 'mc-live': live }" @click="toggle">
       <Icon n="chat" :size="19" />
       <span>讨论</span>
       <i v-if="unread" class="mc-dot">{{ unread }}</i>
     </button>
 
     <Transition name="mat">
-      <section v-if="open" class="mc-sheet glass glass-thick">
+      <section v-if="open" class="mc-sheet glass glass-thick glass-live">
         <header class="mc-head">
           <div class="grow">
             <b>{{ gameName }} · 讨论</b>

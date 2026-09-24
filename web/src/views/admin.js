@@ -76,7 +76,7 @@ registerRoute("/admin", defineView("admin", {
     </div>
     <p v-else-if="myClassName" class="cap mt3">只看得到 {{ myClassName }} 的数据</p>
 
-    <div class="ad-segs glass glass-thin" ref="segEl" data-no-swipe>
+    <div class="ad-segs glass glass-thin glass-live" ref="segEl" data-no-swipe>
       <span class="seg-pill" :style="pill" aria-hidden="true"></span>
       <button v-for="t in tabs" :key="t.id" :class="{ on: tab === t.id }" @click="go(t.id)">
         {{ t.label }}
