@@ -7,6 +7,13 @@ import { useRoom } from "../room.js";
 const COLORS = ["#1c1c1e", "#ff3b30", "#ff9500", "#34c759", "#0a84ff", "#af52de"];
 const SIZES = [3, 7, 14];
 const ERASER_SIZES = [14, 26, 40];
+/* 笔粗按钮里那个小圆点的直径（px）。它只是"粗细预览"，不必等于实际笔画宽度，
+   所以和上面的尺寸分成两套数据。
+   老代码用一个公式 szDot(s) = min(22, 3 + s*0.9) 现算，结果橡皮那三个算出
+   [16, 22, 22] —— 后两个被上限 22 卡成一样大，看着像"两个按钮没区别"。
+   改成显式列表后，三个档位各自可控。 */
+const SIZES_DOTS = [6, 9, 16];
+const ERASER_DOTS = [10, 16, 22];
 
 registerRoute("/games/draw", defineView("gameDraw", {
   template: `
@@ -20,7 +27,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
       <button class="btn glass glass-thin code-btn" @click="copyCode">{{ roomCode }}</button>
     </header>
 
-    <div class="glass glass-thick glass-liquid gd-wordbar mt4">
+    <div v-if="room && room.started" class="glass glass-thick glass-liquid gd-wordbar mt4">
       <div class="grow">
         <p class="cap">{{ isDrawer ? "你来画" : (solvedByMe ? "已猜中，等待本轮结束" : "猜这个词") }}</p>
         <h2 class="gd-word">{{ isDrawer ? (state.word || "") : (state.masked || "…") }}</h2>
@@ -42,21 +49,33 @@ registerRoute("/games/draw", defineView("gameDraw", {
     <div class="gd-board glass glass-thin mt3">
       <canvas ref="cv" class="gd-cv" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="up"></canvas>
       <div v-if="isDrawer && playing" class="gd-tools">
-        <button v-for="c in colors" :key="c" class="gd-sw" :class="{ on: color === c && !eraser }" :style="{ background: c }"
-                @click="pickColor(c)"></button>
-        <span class="gd-div"></span>
-        <button class="gd-tool" :class="{ on: eraser }" title="橡皮" aria-label="橡皮" @click="toggleEraser">
-          <Icon n="eraser" :size="17" />
-        </button>
-        <span class="gd-div"></span>
-        <button v-for="s in activeSizes" :key="s" class="gd-sz" :class="{ on: activeSize === s && !eraser }"
-                @click="pickSize(s)">
-          <i :style="{ width: szDot(s) + 'px', height: szDot(s) + 'px' }"></i>
-        </button>
-        <span class="grow"></span>
-        <button class="btn btn-icon glass glass-thin" title="撤销" @click="undo"><Icon n="back" :size="17" /></button>
-        <button class="btn btn-icon glass glass-thin" title="清空" @click="clearAll"><Icon n="trash" :size="17" /></button>
-      </div>
+        <div class="gd-row">
+          <button v-for="c in colors" :key="c" class="gd-sw"
+                  :class="{ on: color === c && !eraser }"
+                  :style="{ background: c }"
+                  @click="pickColor(c)"></button>
+          <span class="grow"></span>
+          <button class="btn btn-icon glass glass-thin" title="撤销" @click="undo">
+            <Icon n="back" :size="17" />
+          </button>
+        </div>
+
+        <div class="gd-row">
+          <button class="gd-tool" :class="{ on: eraser }" title="橡皮" aria-label="橡皮" @click="toggleEraser">
+            <Icon n="eraser" :size="17" />
+          </button>
+          <span class="gd-div"></span>
+          <button v-for="(s, i) in activeSizes" :key="s" class="gd-sz"
+                  :class="{ on: activeSize === s }"
+                  @click="pickSize(s)">
+            <i :style="{ width: activeDots[i] + 'px', height: activeDots[i] + 'px' }"></i>
+          </button>
+            <span class="grow"></span>
+            <button class="btn btn-icon glass glass-thin" title="清空" @click="clearAll">
+                <Icon n="trash" :size="17" />
+            </button>
+        </div>
+    </div>
       <p v-else-if="!playing" class="cap gd-empty">{{ canStart ? "至少 2 人才可以开始" : "等待画手作画…" }}</p>
     </div>
 
@@ -78,17 +97,9 @@ registerRoute("/games/draw", defineView("gameDraw", {
         </div>
         <p v-if="!feed.length" class="cap gd-feed-empty">还没有人说话，猜中的词会打码成 ***</p>
       </div>
-      <form class="gd-composer" @submit.prevent="send">
-        <input class="field" v-model="draft" :disabled="isDrawer || !playing" maxlength="40"
-               :placeholder="isDrawer ? '你是画手，专心画啦' : (isSpectator ? '观战发言（会变成弹幕）' : '输入你猜的词')"
-               enterkeyhint="send" />
-        <button class="btn btn-primary btn-icon btn-lg" type="submit" :disabled="isDrawer || !playing || !draft.trim()">
-          <Icon n="send" :size="19" />
-        </button>
-      </form>
     </section>
 
-    <section class="gd-rank mt4">
+    <section v-if="room && room.started" class="gd-rank mt4">
       <button class="gd-rank-head glass glass-thin" @click="toggleRank">
         <Icon n="chart" :size="16" />
         <b class="grow">本场积分排名</b>
@@ -110,6 +121,16 @@ registerRoute("/games/draw", defineView("gameDraw", {
         </div>
       </Transition>
     </section>
+
+    <div class="gd-bar-spacer"></div>
+    <form class="gd-composer glass glass-thick" @submit.prevent="send">
+      <input class="field" v-model="draft" :disabled="isDrawer || !playing" maxlength="40"
+             :placeholder="isDrawer ? '你是画手，专心画啦' : (isSpectator ? '观战发言（会变成弹幕）' : '输入你猜的词')"
+             enterkeyhint="send" />
+      <button class="btn btn-primary btn-icon btn-lg" type="submit" :disabled="isDrawer || !playing || !draft.trim()">
+        <Icon n="send" :size="19" />
+      </button>
+    </form>
 
     <div v-if="notice" class="rematch-bar mt4" :class="{ want: othersWantRematch }">{{ notice }}</div>
 
@@ -143,16 +164,23 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-reveal { padding: var(--s3) var(--s4); border-radius: var(--r-md); text-align: center; font-weight: 600; }
   .gd-board { position: relative; border-radius: var(--r-lg); overflow: hidden; }
   .gd-cv { display: block; width: 100%; aspect-ratio: 4 / 3; touch-action: none; background: #fff; }
-  .gd-tools { display: flex; align-items: center; gap: 10px; padding: 10px var(--s4) calc(10px + var(--safe-b)); }
-  .gd-sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+  .gd-tools { display: flex; flex-direction: column; gap: 8px; padding: 10px var(--s4) calc(10px + var(--safe-b)); }
+  .gd-row { display: flex; align-items: center; gap: 10px; }
+  /* 下面三个都是 <button>，而项目没有全局重置 UA 的 padding / border / appearance。
+     不重置的话按钮内部会被原生边框(1.7px outset)和内边距(1px 4px)挤小，
+     .gd-sz 里那个"圆点偏离圆心"就是这么来的（实测内部只剩约 18.6×24.6）。
+     这条必须放在 .gd-sw / .gd-tool / .gd-sz 各自的规则【之前】，否则会被盖掉。 */
+  .gd-sw, .gd-tool, .gd-sz { appearance: none; -webkit-appearance: none; padding: 0; border: 0; }
+  .gd-sw { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
   .gd-sw.on { border-color: var(--ink); transform: scale(1.12); }
-  .gd-sz { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; }
-  .gd-sz.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .gd-sz { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 50%; }
+  .gd-sz.on { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+  .gd-sz on i { background: var(--accent); }
   .gd-sz i { display: block; border-radius: 50%; background: var(--ink); }
-  .gd-tool { height: 30px; min-width: 30px; padding: 0 5px; display: grid; place-items: center;
+  .gd-tool { height: 30px; min-width: 30px; flex: none; padding: 0 5px; display: grid; place-items: center;
     border-radius: 15px; color: var(--ink-2); }
   .gd-tool.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-  .gd-div { width: 1px; height: 20px; background: var(--hair); }
+  .gd-div { width: 1px; height: 20px; flex: none; background: var(--hair); }
   .gd-empty { padding: var(--s5); text-align: center; }
   .gd-chat { display: flex; flex-direction: column; padding: var(--s3) var(--s4) var(--s4); border-radius: var(--r-lg); }
   .gd-chat-head { display: flex; align-items: baseline; gap: var(--s2); padding-bottom: var(--s2); }
@@ -165,7 +193,14 @@ registerRoute("/games/draw", defineView("gameDraw", {
   .gd-frow b { color: var(--ink-2); font-weight: 600; flex: none; }
   .gd-frow.me b { color: var(--accent); }
   .gd-frow.ok { color: var(--green); }
-  .gd-composer { display: flex; gap: 10px; margin-top: var(--s2); padding-top: var(--s3); border-top: 1px solid var(--hair); }
+  /* 底部固定输入条。留白 132px 同时避开固定条（约 74px）和它上面的「讨论」悬浮球
+     （.mc-fab 在 safe-b + 78px、高约 50px），否则聊天最后几行会被盖住。
+     数值和 game-liar.js 的 .liar-bar-spacer 保持一致。 */
+  .gd-bar-spacer { height: 132px; }
+  .gd-composer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    display: flex; gap: 10px;
+    padding: var(--s3) var(--s4) calc(var(--s3) + var(--safe-b));
+    border-radius: var(--r-xl) var(--r-xl) 0 0; }
   .gd-composer .field { flex: 1; }
   .gd-rank-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px var(--s4);
     border-radius: var(--r-lg); text-align: left; }
@@ -174,7 +209,8 @@ registerRoute("/games/draw", defineView("gameDraw", {
     transition: transform var(--dur-med) var(--ease-out); transform: rotate(-90deg); }
   .gd-caret.open { transform: rotate(90deg); }
   .gd-rank .list { padding: 4px var(--s3); }
-  .gd-overlay { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + var(--s6));
+  .gd-overlay { position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(var(--safe-b) + 90px);      
     padding: var(--s5); border-radius: var(--r-xl); text-align: center; width: min(90vw, 400px); z-index: 30; }
   `,
   setup() {
@@ -198,7 +234,9 @@ registerRoute("/games/draw", defineView("gameDraw", {
     let stops = [];
     let ticker = null;
 
+
     const activeSizes = computed(() => (eraser.value ? ERASER_SIZES : SIZES));
+    const activeDots = computed(() => (eraser.value ? ERASER_DOTS : SIZES_DOTS));
     const activeSize = computed(() => (eraser.value ? esize.value : size.value));
     const me = computed(() => store.user?.id);
     const isDrawer = computed(() => state.value.drawer === me.value);
@@ -315,7 +353,6 @@ registerRoute("/games/draw", defineView("gameDraw", {
       try { cv.value.releasePointerCapture(ev.pointerId); } catch (e) {}
     }
 
-    function szDot(s) { return Math.round(Math.min(22, 3 + s * 0.9)); }
     function pickColor(c) { color.value = c; eraser.value = false; haptic(6); }
     function toggleEraser() { eraser.value = !eraser.value; haptic(8); }
     function pickSize(s) { if (eraser.value) esize.value = s; else size.value = s; haptic(6); }
@@ -379,7 +416,7 @@ registerRoute("/games/draw", defineView("gameDraw", {
     });
 
     return { ...roomApi, cv, state, players, feed, finished, winners, draft, color, size, left, isSpectator,
-             colors: COLORS, sizes: SIZES, eraser, activeSizes, activeSize, szDot, pickColor, toggleEraser, pickSize,
+             colors: COLORS, sizes: SIZES, eraser, activeSizes, activeDots, activeSize, pickColor, toggleEraser, pickSize,
              isDrawer, playing, revealed, solvedByMe, canStart, ratio, roundSeconds,
              ranked, iWon, statusText, down, move, up, undo, clearAll, start, send, store, mediaUrl,
              rankOpen, toggleRank, myRank, feedEl, me };
