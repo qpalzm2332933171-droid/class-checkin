@@ -7,6 +7,7 @@ import time
 
 import boardgames as bgl
 import db
+import liar
 import werewolf as ww
 from drawwords import WORDS
 from util import dumps, log, now
@@ -54,6 +55,8 @@ GAME_META = {
     "xiangqi": {"name": "象棋", "min": 2, "max": 2, "desc": "标准中国象棋 · 将死或困毙即胜"},
     "werewolf": {"name": "狼人杀", "min": ww.MIN_PLAYERS, "max": ww.MAX_PLAYERS,
                  "desc": "6~12 人正规板子 · 预女猎白 · 狼刀+验人+用药+投票放逐"},
+    "liar": {"name": "骗子酒馆", "min": liar.MIN_PLAYERS, "max": liar.MAX_PLAYERS,
+             "desc": "4 人 · 盖牌吹牛 · 质疑开牌打俄罗斯轮盘"},
 }
 
 # 棋盘形状：(列, 行)
@@ -146,6 +149,11 @@ class Room:
                 return "finished"
             await self.broadcast({"t": "game.event", "text": "%s 中途退出，直接出局" % name})
             return "dropped"
+        if self.game == "liar":
+            if await liar.drop(self, uid, name):
+                return "finished"
+            await self.broadcast({"t": "game.event", "text": "%s 中途退出，直接出局" % name})
+            return "dropped"
         # 其它多人局：走的人先记一次负场，本局接着打
         db.add_points(uid, online=-1, outcome=False)
         db.execute("INSERT INTO game_records(game, mode, players, winners, detail, created_at) VALUES(?,?,?,?,?,?)",
@@ -202,6 +210,8 @@ class Room:
             await start_xiangqi(self)
         elif self.game == "werewolf":
             await ww.start(self)
+        elif self.game == "liar":
+            await liar.start(self)
         elif self.game == "draw":
             await draw_start(self)
         elif self.game == "bomb":
@@ -300,6 +310,9 @@ class Room:
             else:
                 state = {"waiting": True, "players_now": len(self.seats),
                          "board": ww.board_summary(max(len(self.seats), ww.MIN_PLAYERS))}
+        elif self.game == "liar":
+            # 骗子酒馆：手牌和实弹位置都只能给本人（见 liar.view）
+            state = liar.view(self.state, viewer.uid if viewer else 0)
         return {
             "id": self.id,
             "code": self.id,
@@ -713,6 +726,8 @@ async def restart(room):
         await start_xiangqi(room)
     elif room.game == "werewolf":
         await ww.start(room)          # 狼人杀重开：重新洗牌发身份
+    elif room.game == "liar":
+        await liar.start(room)        # 骗子酒馆重开：重新洗牌发手牌
     elif room.game == "draw":
         await draw_start(room)
     elif room.game == "bomb":
@@ -1065,6 +1080,9 @@ async def handle(conn, action, msg):
         # 狼人杀：狼刀 / 验人 / 女巫用药 / 猎人开枪 / 放逐投票
         if room.game == "werewolf":
             await ww.act(room, conn, (msg.get("what") or "").strip(), msg)
+        # 骗子酒馆：出牌 / 质疑 / 放过
+        elif room.game == "liar":
+            await liar.act(room, conn, (msg.get("what") or "").strip(), msg)
         return
     if action == "draw":
         if room.game == "draw" and conn.uid == room.state.get("drawer") and room.started:
@@ -1153,6 +1171,16 @@ async def werewolf_tick():
                 log("werewolf tick error", repr(exc))
 
 
+async def liar_tick():
+    """骗子酒馆的状态机靠它推进（回合超时自动出牌、开牌展示期到点开下一轮）。"""
+    for room in list(ROOMS.values()):
+        if room.game == "liar" and room.started and not room.finished:
+            try:
+                await liar.tick(room)
+            except Exception as exc:  # noqa: BLE001
+                log("liar tick error", repr(exc))
+
+
 async def ticker():
     import asyncio
     while True:
@@ -1160,6 +1188,7 @@ async def ticker():
         try:
             await draw_timeout_check()
             await werewolf_tick()
+            await liar_tick()
             await sweep_disconnected()
         except Exception as exc:  # noqa: BLE001
             log("game ticker error", repr(exc))

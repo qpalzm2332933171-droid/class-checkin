@@ -11,7 +11,10 @@ class-checkin/
 │   ├── app.py        HTTP 核心：路由 / 静态文件 / ETag / WS 升级
 │   ├── api.py        全部 REST 接口
 │   ├── ws.py         WebSocket：握手 / 帧编解码 / 在线状态 / 匿名聊天
-│   ├── games.py      房间模型 + 4 款联机游戏的服务端权威逻辑
+│   ├── games.py      房间模型 + 联机游戏服务端权威逻辑（房间号/座位/准备/观战/结算）
+│   ├── werewolf.py   狼人杀状态机（6~12 人板子）
+│   ├── liar.py       骗子酒馆状态机（4 人 · 盖牌吹牛 · 质疑开牌打俄罗斯轮盘）
+│   ├── boardgames.py 围棋 / 象棋棋盘规则
 │   ├── db.py         SQLite 表结构与访问层
 │   ├── auth.py       pbkdf2 口令 + 会话 token
 │   └── bootstrap.py  首次启动生成初始账号
@@ -28,7 +31,7 @@ class-checkin/
 ├── android/       安卓壳工程（WebView + 热更新）
 ├── tests/         冒烟测试（35 项接口断言）
 ├── tools/         provision.py（批量开号）/ make_icon.py（生成图标）
-└── docs/          部署说明 / 账号表 / 界面截图
+├── docs/          部署说明 / 账号表 / 界面截图 / liar.md（骗子酒馆实现说明）/ TODO.md
 ```
 
 ## 本地运行

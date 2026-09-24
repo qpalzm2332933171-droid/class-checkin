@@ -29,6 +29,37 @@
 | `features-round-q.mjs` | Q 阶段：围棋 9/19 路、画猜词库与打码、观战弹幕、象棋将军/绝杀动画 | — |
 | `features-round-r.mjs` | R 阶段：滑页时毛玻璃不降级成白块、签到窗口、定位选点+搜索按远近排序、资委记录页、Excel 导出、更新日志不再发公告 | `ADMIN_USER`/`ADMIN_PASS`、`STAFF_USER`/`STAFF_PASS` |
 | `layout-audit.mjs` | **布局审计**：16 个页面 × 9 种尺寸（窄屏/宽屏/平板/横屏/超宽），检查组件越界与"不该发生的换行"，用于拦住不同分辨率下 UI 被挤到下一行的问题 | `AUDIT_USER`/`AUDIT_PASS` |
+| `liar-ui.mjs` | 骗子酒馆牌桌：建房/4 人加入/准备开局、牌面与弹巢渲染、选牌与按钮文案、开牌面板、当事人区分、结束浮层、再来一局。**用系统自带的 Firefox（WebDriver BiDi）**（不是下面的 CDP/Edge 那套），关键画面截图到 `shots/` | `LIAR_ACCOUNTS`（4 个账号） |
+
+### liar-ui.mjs 单独说明
+
+它是唯一一个**不用 CDP/Edge** 的用例：在 Linux 上跑，浏览器用**系统自带的 Firefox**，
+通过 `bidi-firefox.mjs`（WebDriver BiDi，Firefox 129+ 原生支持）驱动。
+**不需要 Playwright、不需要下载任何浏览器**，只要 `which firefox` 能找到就行。
+
+```bash
+# 零依赖直接跑
+CHECKIN_BASE=http://127.0.0.1:8081 \
+LIAR_ACCOUNTS='u1:p1 u2:p2 u3:p3 u4:p4' \
+node tests/browser/liar-ui.mjs
+```
+
+跑之前建议把 `liar_speed` 调大（例如 5）让开牌展示期变短，整局才跑得完。
+
+`bidi-firefox.mjs` 是一层 **Playwright 风格的薄封装**（`launch / newContext / addInitScript /
+newPage / goto / evaluate / locator().click() / screenshot`），用法跟 Playwright 很像，
+但有两处不一样：
+
+- `page.url()` 是**异步**的（Playwright 那个是同步的），记得 `await`。
+- `locator` 只实现了 `count / click / first / nth / last / isDisabled / textContent`；
+  选择器支持 CSS 和 Playwright 的 `text=xxx`，`{ hasText }` 也支持。
+
+**踩过的坑（改这个 harness 时注意）**
+Firefox 默认**节流后台标签页** —— 后台标签页不跑 CSS 过渡，于是 Vue 的 `<Transition>`
+永远等不到 `transitionend`：离场元素不回收（手牌区一度堆到 89 张）、结束浮层停在
+`opacity:0` 迟迟不出现，看起来像应用出了 bug。harness 里做了两件事治它：
+profile 里写 `user.js` 关掉后台节流，并且**每次交互前用 `browsingContext.activate`
+把目标标签页切到前台**。加新用例时不要绕过这两点。
 
 ## 运行
 

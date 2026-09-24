@@ -24,6 +24,9 @@ android/.gradle/
 *.keystore
 *.jks
 
+# 浏览器用例跑出来的截图（每次跑都会变，只是给人眼看设计的）
+tests/browser/shots/
+
 # Python
 __pycache__/
 *.py[cod]
