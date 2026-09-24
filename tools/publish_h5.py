@@ -66,17 +66,20 @@ def main():
     notes = sys.argv[3] if len(sys.argv) > 3 else "班级签到 H5 更新"
     user = sys.argv[4] if len(sys.argv) > 4 else "admin"
     if not password:
-        print("用法: python tools/publish_h5.py <服务器> <管理员密码> [更新说明]")
+        print("用法: python tools/publish_h5.py <服务器> <管理员密码> [更新说明] [管理员用户名] [版本号]")
         return 1
     login = call(base, "/api/login", "POST", {"username": user, "password": password})
     token = login["token"]
     current = call(base, "/api/app/version?platform=h5&code=0").get("version_code", 0)
+    # 版本号默认取 current+1，但允许显式指定：更新日志的版本号和 H5 的 version_code
+    # 是两条线（中途可能只发过 APK，H5 这边就跳号了），硬编码 +1 会让两边对不上。
+    code = int(sys.argv[5]) if len(sys.argv) > 5 else current + 1
     payload, count = build_zip()
     result = call(base, "/api/admin/upload", "POST", token=token, raw=payload,
                   query="?name=h5.zip&kind=h5&version_code=%d&version_name=%s&notes=%s"
-                        % (current + 1, urllib.parse.quote("v%d" % (current + 1)), urllib.parse.quote(notes)))
+                        % (code, urllib.parse.quote("v%d" % code), urllib.parse.quote(notes)))
     print("打包 %d 个文件, %.1f KB" % (count, len(payload) / 1024.0))
-    print("已发布 H5 热更新包: v%s -> v%s" % (current, result["version_code"]))
+    print("已发布 H5 热更新包: v%s -> v%s" % (current, code))
     return 0
 
 
