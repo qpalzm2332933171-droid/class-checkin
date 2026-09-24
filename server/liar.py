@@ -423,6 +423,11 @@ async def end(room, winners, reason):
     state["status"] = "finished"
     state["phase"] = "over"
     state["winners"] = list(winners or [])
+    # reason 必须在这里就写进 state：下面 announce() 会立刻推一条 game.state，
+    # 而真正把 reason 落库/下发的 Room.finish 在更后面。不写的话，客户端会先收到
+    # 一条「status=finished 但 reason 为空」的状态，结算浮层那一行就是空白的
+    #（线上实测抓到过：远端跑 liar_flow 时 state 先到、game.over 后到）。
+    state["reason"] = reason
     state["deadline"] = 0
     text = "、".join(name_of(state, u) for u in (winners or [])) or "无人"
     rounds = "，".join("%s %d 轮" % (name_of(state, u), state["round_wins"].get(str(u), 0))

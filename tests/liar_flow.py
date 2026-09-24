@@ -76,14 +76,18 @@ def _resolve_data_dir(users):
             continue
         if hit == len(users):
             return os.path.abspath(d)
-    sys.exit("找不到服务端真正在用的数据库（试过：%s）。\n"
-             "请把 CHECKIN_DATA 指到服务端的数据目录后重跑，例如：\n"
-             '  $env:CHECKIN_DATA="D:\\learn\\class-checkin\\data"'
-             % "、".join(cands))
+    print("⚠ 找不到服务端在用的数据库（试过：%s）。" % "、".join(cands))
+    print("  跳过加速旋钮，整局按原速跑（每回合 25 秒，会比较慢）。")
+    print("  本机跑请把 CHECKIN_DATA 指到服务端的数据目录；对着远端跑就先手动调快。")
+    return None
 
 
-def set_speed(speed, users):
-    os.environ["CHECKIN_DATA"] = _resolve_data_dir(users)
+def set_speed(speed=5, users=()):
+    """返回旧值；摸不到服务端数据库就返回 None（不阻断测试，只是不加速）。"""
+    data_dir = _resolve_data_dir(users)
+    if not data_dir:
+        return None
+    os.environ["CHECKIN_DATA"] = data_dir
     import db
     db.init()
     old = db.setting("liar_speed", "1")
@@ -92,6 +96,8 @@ def set_speed(speed, users):
 
 
 def restore_speed(old):
+    if old is None:
+        return
     import db
     if old in ("", None):
         db.execute("DELETE FROM settings WHERE k = ?", ("liar_speed",))
@@ -290,8 +296,16 @@ def main():
         alive = [u for u, v in (final_st.get("alive") or {}).items() if v]
         check("结算时恰好剩 1 人存活", len(alive) == 1, str(alive))
         check("赢家就是那个活着的人", [str(w) for w in winners] == alive)
-        check("所有人都收到了结束推送", all(c.over() or (c.state() or {}).get("status") == "finished"
-                                       for c in conns))
+        # 4 条连接各自有独立收包线程，game.over 不保证同一个瞬间被解析完。
+        # 对着远端跑时这个竞态会真的踩到（线上实测过一次假失败），所以给它一点时间。
+        def all_ended():
+            return all(cc.over() or (cc.state() or {}).get("status") == "finished" for cc in conns)
+
+        for _ in range(20):
+            if all_ended():
+                break
+            time.sleep(0.1)
+        check("所有人都收到了结束推送", all_ended())
         check("过程里真的开过牌", stats["reveal"] > 0, str(stats))
         check("过程里真的开过枪", stats["shots"] > 0, str(stats))
         check("出完手牌的两条分支都走到过（有人质疑 / 有人放过）",
