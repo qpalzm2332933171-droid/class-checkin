@@ -14,6 +14,7 @@ const ONLINE = [
   { key: "go", name: "围棋", desc: "9 路棋盘 · 数子定胜负 · 黑贴 7.5 目", icon: "go" },
   { key: "xiangqi", name: "象棋", desc: "标准中国象棋 · 将死 / 困毙即胜", icon: "chess" },
   { key: "werewolf", name: "狼人杀", desc: "6~12 人正规板子 · 预女猎白", icon: "wolf" },
+  { key: "liar", name: "骗子酒馆", desc: "4 人盖牌吹牛 · 质疑开牌打俄罗斯轮盘", icon: "cards" },
   { key: "draw", name: "你画我猜", desc: "2~10 人轮流作画互相猜", icon: "brush" },
   { key: "bomb", name: "数字炸弹", desc: "轮流报数，踩中炸弹的人出局", icon: "bomb" },
 ];
@@ -413,6 +414,7 @@ registerRoute("/games", defineView("games", {
       if (["gomoku", "tictactoe", "go"].includes(room.game)) return "/games/board?room=" + room.id;
       if (room.game === "xiangqi") return "/games/xiangqi?room=" + room.id;
       if (room.game === "werewolf") return "/games/werewolf?room=" + room.id;
+      if (room.game === "liar") return "/games/liar?room=" + room.id;
       if (room.game === "draw") return "/games/draw?room=" + room.id;
       if (room.game === "bomb") return "/games/bomb?room=" + room.id;
       return "/games";

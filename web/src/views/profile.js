@@ -385,7 +385,7 @@ registerRoute("/me", defineView("profile", {
     return { store, stats, points, form, pwd, editOpen, pwdOpen, saving, pwdBusy, bundle, clock, colors, fileEl,
              avatarBusy, checking, isAdmin, isStaff, roleChip, myAvatar, versionText,
              initial, recent, year, avatarStyle, labelOf, chipOf, colorOf, when,
-             save, changePassword, checkUpdate, doLogout, navigate, isApp, setToken,
+             save, changePassword, checkUpdate, doLogout, navigate, isApp, setToken, haptic,
              chooseFile, pickAvatar, clearAvatar };
   },
 }));

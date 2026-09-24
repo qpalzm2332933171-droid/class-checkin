@@ -338,7 +338,7 @@ registerRoute("/chat/topic", defineView("chatTopic", {
       </div>
     </Transition>
 
-    <div class="composer glass glass-thick">
+    <div class="composer glass glass-thick glass-live">
       <button class="anon-toggle" :class="{ on: anon }" @click="setAnonMode(!anon)" title="与讨论主界面的开关是同一个">
         <Icon :n="anon ? 'eyeOff' : 'eye'" :size="18" />
         <span>{{ anon ? '匿名' : '实名' }}</span>

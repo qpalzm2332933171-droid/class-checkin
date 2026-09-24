@@ -307,7 +307,7 @@ registerRoute("/games/xiangqi", defineView("gameXiangqi", {
     });
 
     return { ...roomApi, board, cols, rows, selected, points, players, finished, isSpectator,
-             statusText, resultTitle, resultReason, glyph, labelOf, sideOf, isTurn, isLast, tap, resign, mediaUrl,
+             statusText, resultTitle, resultReason, inCheck, glyph, labelOf, sideOf, isTurn, isLast, tap, resign, mediaUrl,
              fx, fxLabel };
   },
 }));
