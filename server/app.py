@@ -13,7 +13,7 @@ import urllib.parse
 import auth
 import db
 import ws
-from util import dumps, log, loads
+from util import dumps, install_log_guard, log, log_exc, loads
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.environ.get("CHECKIN_WEB") or os.path.join(BASE_DIR, "web")
@@ -348,9 +348,9 @@ async def dispatch(req):
     except HttpError as exc:
         return fail(exc.status, exc.message)
     except Exception as exc:  # noqa: BLE001
-        log("ERROR", req.method, req.path, repr(exc))
-        import traceback
-        traceback.print_exc()
+        # 以前这里还有一句 traceback.print_exc()：它绕过 log() 的限流直接写 stderr，
+        # 请求一多就是又一条把磁盘写满的路。log_exc 会带上出错位置，够查了。
+        log_exc("ERROR %s %s" % (req.method, req.path), exc)
         return fail(500, "服务器内部错误: %s" % exc)
     if isinstance(result, Response):
         return result
@@ -389,6 +389,9 @@ async def handle_connection(reader, writer):
 
 async def main():
     import api  # noqa: F401  (registers routes)
+    # 第一件事就把日志闸门装上：asyncio 默认处理器不限速地打 traceback，
+    # 2026-09-23 的 26.5GB 就是它干的。
+    install_log_guard(asyncio.get_running_loop())
     port = int(os.environ.get("CHECKIN_PORT", "80"))
     host = os.environ.get("CHECKIN_HOST", "0.0.0.0")
     db.init()

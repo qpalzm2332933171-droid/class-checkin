@@ -47,7 +47,8 @@ python D:\learn\class-checkin\tests\smoke.py http://127.0.0.1:8081 <管理员密
 
 - 地址：`http://<你的公网IP>:<外网端口>/`（面板 NAT 映射 外网端口 → 内网 18100）
 - 网页端定位签到要 HTTPS：`deploy/https_setup.sh` 一键开一个 HTTPS 监听（自签证书，见 `docs/部署说明.md`）
-- 服务：`systemctl {status|restart} class-checkin`，日志 `/opt/class-checkin/data/server.log`
+- 服务：`systemctl {status|restart} class-checkin`，日志走 journald：`journalctl -u class-checkin -n 50`
+  （2026-09-25 之前是 `data/server.log`，没有轮转，长到 26.5GB 把磁盘写满过；现在归 journald 管，`SystemMaxUse=200M` 封顶）
 - 数据库：`/opt/class-checkin/data/app.db`（后台"高级"页可一键下载备份）
 - 重新部署：`deploy\redeploy.ps1`（默认 ssh 别名 `vanmc`，可 `-Remote <别名>` 覆盖）
 

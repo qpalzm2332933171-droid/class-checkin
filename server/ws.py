@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import hashlib
+import os
 import struct
 import time
 
@@ -13,6 +14,17 @@ from util import dumps, log, loads, now
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 PING_INTERVAL = 25
 IDLE_TIMEOUT = 90
+# 单次读取的最长等待。服务端每 PING_INTERVAL 秒发一次 ping，浏览器和客户端都会自动回 pong，
+# 所以正常连接不会静默这么久。这是「半开连接」的兜底：对端悄悄消失（换网/睡死/NAT 掉表）
+# 时 TCP 不报错，read_frame 会永久阻塞 —— run_connection 的 finally 就永远不执行，
+# CONNS 和 fd 一起永远挂在进程里。没有这个超时，漏出去的连接再也回不来。
+READ_TIMEOUT = float(os.environ.get("CHECKIN_WS_READ_TIMEOUT") or IDLE_TIMEOUT * 2)
+# 单次写的最长等待。drain() 在对端不读、内核发送缓冲写满时会一直阻塞 —— 而且
+# 阻塞的不只是这条连接：heartbeat() 是唯一那个给所有连接发 ping 和回收空闲连接的任务，
+# send() 也会在游戏推进器里被调用。一条卡死的连接就能把那整个任务钉死，
+# 于是所有连接都不再被回收 —— 2026-09-23 的 fd 雪崩很可能就是这么起来的。
+# 正常对端不会卡这么久（数据进了内核缓冲 drain 就返回了）。
+WRITE_TIMEOUT = 10
 
 CONNS = set()
 BY_USER = {}
@@ -73,6 +85,7 @@ class Conn:
         self.ip = ip
         self.device = device
         self.closed = False
+        self.shutdown_done = False  # 是否已经真正关过 socket（见 shutdown()）
         self.passive = False       # 「只看不收」的静默连接（安卓后台值守）：不计在线人数
         self.last_seen = now()
         self.rooms = set()
@@ -89,27 +102,52 @@ class Conn:
         try:
             async with self.write_lock:
                 self.writer.write(encode_frame(0x1, dumps(obj)))
-                await self.writer.drain()
+                await asyncio.wait_for(self.writer.drain(), timeout=WRITE_TIMEOUT)
         except Exception:  # noqa: BLE001
-            self.closed = True
+            self.shutdown()
+
+    def shutdown(self):
+        """标记关闭 **并且真正关掉 socket**。
+
+        只把 closed 置 True 是不够的，两件事都会出问题：
+          1. fd 不释放；
+          2. run_connection 还阻塞在 read_frame 上（半开连接永远不会返回），
+             它 finally 里的清理（CONNS / BY_USER / 房间座位）也就永远不执行。
+        于是每遇到一次就永久漏一个 fd —— 2026-09-23 那次 1024 个 fd 被吃光、
+        服务整整 25 小时接不了新连接，根子就在这。
+
+        关掉 transport 会让阻塞中的 readexactly 立刻抛错，finally 于是能正常跑完。
+        """
+        self.closed = True
+        if self.shutdown_done:
+            return
+        self.shutdown_done = True
+        try:
+            self.writer.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     async def send_text(self, text):
         await self.send({"t": "text", "text": text})
 
     async def close(self, code=1000):
+        """发一个 close 帧再真正关掉。整体有超时，见 WRITE_TIMEOUT。
+
+        这里不能无限等：write_lock 可能被另一条卡住的 drain 攥着，
+        drain 本身也可能永远不返回。heartbeat 回收空闲连接时走的就是这条路，
+        一旦它卡住，整个回收循环就停了。
+        """
         if self.closed:
             return
         self.closed = True
         try:
-            async with self.write_lock:
-                self.writer.write(encode_frame(0x8, struct.pack("!H", code)))
-                await self.writer.drain()
+            async with asyncio.timeout(WRITE_TIMEOUT):
+                async with self.write_lock:
+                    self.writer.write(encode_frame(0x8, struct.pack("!H", code)))
+                    await self.writer.drain()
         except Exception:  # noqa: BLE001
             pass
-        try:
-            self.writer.close()
-        except Exception:  # noqa: BLE001
-            pass
+        self.shutdown()
 
 
 def user_view(row):
@@ -274,13 +312,19 @@ async def run_connection(req, reader, writer):
         if not conn.passive:
             await push_presence()
         while not conn.closed:
-            opcode, data = await read_frame(reader)
+            try:
+                opcode, data = await asyncio.wait_for(read_frame(reader), timeout=READ_TIMEOUT)
+            except asyncio.TimeoutError:
+                # 这么久一个帧都没收到（连浏览器自动回的 pong 也没有）→ 当成死连接收掉，
+                # 走 finally 把 CONNS / BY_USER / 房间座位一起清干净。
+                log("ws 读超时，按死连接回收", conn.ip, conn.device)
+                break
             if opcode == 0x8:
                 break
             if opcode == 0x9:
                 async with conn.write_lock:
                     writer.write(encode_frame(0xA, data))
-                    await writer.drain()
+                    await asyncio.wait_for(writer.drain(), timeout=WRITE_TIMEOUT)
                 continue
             if opcode == 0xA:
                 conn.last_seen = now()
@@ -330,9 +374,11 @@ async def heartbeat():
             try:
                 async with conn.write_lock:
                     conn.writer.write(encode_frame(0x9, b"hb"))
-                    await conn.writer.drain()
+                    await asyncio.wait_for(conn.writer.drain(), timeout=WRITE_TIMEOUT)
             except Exception:  # noqa: BLE001
-                conn.closed = True
+                # 以前这里只写 conn.closed = True：fd 不释放、连接也留在 CONNS 里，
+                # 对端已经消失的连接就这么一个个攒起来，最后把 fd 用光。
+                conn.shutdown()
         if live_conns():
             await push_presence()
 
