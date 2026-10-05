@@ -1,0 +1,111 @@
+/* 坦克大战 —— 对照 C++ 版 760×420 固定窗口布局，超出视口时整体缩放 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { height: 100%; }
+body {
+  background: #14161a;
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hidden { display: none !important; }
+
+.screen {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.btn {
+  border: 0; outline: 0; cursor: pointer;
+  font-size: 15px; padding: 9px 18px;
+  border-radius: 8px; color: #e8eaf0;
+  background: #2c313c; transition: background .15s, transform .1s;
+}
+.btn:hover { background: #3a4150; }
+.btn:active { transform: scale(.96); }
+.btn-primary { background: #c0392b; }
+.btn-primary:hover { background: #d24b3c; }
+
+/* ------------------------------------------------ 主菜单 */
+#menu { flex-direction: column; }
+.menu-bg {
+  position: absolute; inset: 0;
+  background: url("../img/entry.jpg") center / cover no-repeat;
+  opacity: .92;
+}
+.menu-box {
+  position: relative; text-align: center;
+  background: rgba(16, 18, 24, .55); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px; padding: 36px 46px;
+  backdrop-filter: blur(4px);
+}
+.menu-title {
+  color: #fff; font-size: 40px; letter-spacing: 6px;
+  text-shadow: 0 2px 8px rgba(0,0,0,.6);
+}
+.menu-sub { color: #b9bfcc; margin-top: 4px; font-size: 14px; letter-spacing: 2px; }
+.menu-box .btn { margin-top: 26px; font-size: 17px; padding: 12px 44px; }
+.menu-hint { margin-top: 22px; color: #9aa2b1; font-size: 12.5px; line-height: 1.8; }
+
+/* ------------------------------------------------ 游戏画面（760×420 固定布局） */
+#stage {
+  position: relative;
+  width: 760px; height: 420px;
+  display: flex;
+  transform-origin: center center;
+}
+#gameArea {
+  position: relative; width: 660px; height: 420px;
+  background: #f2f2f2;
+}
+#gameCanvas { display: block; background: #f2f2f2; }
+
+#sidebar {
+  width: 100px; height: 420px;
+  display: flex; flex-direction: column; align-items: center;
+  background: #1d2129; border-left: 1px solid rgba(255,255,255,.08);
+}
+#playerInfoBox { flex: 1; width: 100%; display: flex; flex-direction: column; justify-content: space-around; }
+.player-item { text-align: center; }
+.player-item canvas { display: block; margin: 0 auto; }
+.player-name {
+  margin-top: 2px; color: #dfe3ec; font-size: 12px; max-width: 92px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.player-score { margin-top: 2px; color: #ffd166; font-size: 18px; font-weight: 700; }
+#quitBtn { margin-bottom: 10px; }
+
+/* ------------------------------------------------ 触屏控件（手机端，固定于视口，不随舞台缩放） */
+#touchControls { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+/* 左下双圈摇杆：内圈边界 = r 1.0（只转向），满行程 = r 2.0（转向+前进） */
+.joy-zone {
+  position: absolute; left: 0; bottom: 56px; width: 216px; height: 216px;
+  pointer-events: auto; touch-action: none;
+}
+.joy-base {
+  position: absolute; left: 50%; top: 50%; width: 140px; height: 140px;
+  margin: -70px 0 0 -70px; border-radius: 50%;
+  background: rgba(30, 34, 44, .45); border: 2px solid rgba(255, 255, 255, .3);
+}
+.joy-ring-inner {
+  position: absolute; left: 50%; top: 50%; width: 60px; height: 60px;
+  margin: -30px 0 0 -30px; border-radius: 50%;
+  border: 1.5px dashed rgba(255, 255, 255, .28);
+}
+.joy-knob {
+  position: absolute; left: 50%; top: 50%; width: 54px; height: 54px;
+  margin: -27px 0 0 -27px; border-radius: 50%;
+  background: rgba(192, 57, 43, .5); border: 2px solid rgba(255, 255, 255, .45);
+  will-change: transform;
+}
+/* 右下圆形开火键 */
+.fire-btn {
+  position: absolute; right: 22px; bottom: 30px; pointer-events: auto;
+  width: 76px; height: 76px; border: 2px solid rgba(255, 255, 255, .4);
+  border-radius: 50%; background: rgba(192, 57, 43, .6); color: #fff;
+  font-size: 16px; font-weight: 700; outline: 0; touch-action: none;
+}
+.fire-btn.pressed { background: rgba(192, 57, 43, .92); transform: scale(.92); }

@@ -1261,6 +1261,7 @@ async def games_meta(req):
 SOLO_MINE_POINTS = {"easy": 0, "normal": 1, "hard": 2, "insane": 3}
 SOLO_COOLDOWN = 10  # 秒，防止连点刷分
 DANMAKU_MAX_POINTS = 10  # 弹幕大战单局积分上限（对应 20 万分封顶），防伪造刷分
+TANK_MAX_POINTS = 10  # 坦克大战单局积分上限（每击毁 1 辆记 1 分），防伪造刷分
 _solo_last = {}
 
 
@@ -1276,7 +1277,7 @@ async def games_leaderboard(req):
 @route("POST", "/api/games/solo/points")
 async def solo_points(req):
     """单机游戏领积分：2048 每合成一个 2048 记 1 分；扫雷按难度 0/1/2/3 分；
-    弹幕大战按 score//20000 计分，单局上限 10 分。"""
+    弹幕大战按 score//20000 计分，单局上限 10 分；坦克大战每击毁 1 辆记 1 分，单局上限 10 分。"""
     data = req.json()
     kind = (data.get("kind") or "").strip()
     difficulty = (data.get("difficulty") or "").strip()
@@ -1293,6 +1294,13 @@ async def solo_points(req):
             raise HttpError(400, "分数格式不对")
         points = min(score // 20000, DANMAKU_MAX_POINTS)
         label = "弹幕大战"
+    elif kind == "tank":
+        try:
+            score = max(0, int(float(data.get("score") or 0)))
+        except (TypeError, ValueError):
+            raise HttpError(400, "分数格式不对")
+        points = min(score, TANK_MAX_POINTS)
+        label = "坦克大战"
     else:
         raise HttpError(400, "未知游戏")
     if points <= 0:

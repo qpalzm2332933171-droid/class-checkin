@@ -7,6 +7,7 @@ const SINGLE = [
   { key: "2048", name: "2048", desc: "滑一滑，把数字合到 2048", icon: "puzzle", path: "/games/2048" },
   { key: "mine", name: "扫雷", desc: "经典 9×9，长按插旗", icon: "flag", path: "/games/mine" },
   { key: "danmaku", name: "弹幕大战", desc: "躲弹幕打单词，每 2 万分 +1 积分", icon: "game", path: "/games/danmaku" },
+  { key: "tank", name: "坦克大战", desc: "迷宫对轰 AI 坦克，每击毁 1 辆 +1 积分", icon: "tank", path: "/games/tank" },
 ];
 const ONLINE = [
   { key: "gomoku", name: "五子棋", desc: "15×15 对弈，五连即胜", icon: "grid" },
@@ -180,7 +181,7 @@ registerRoute("/games", defineView("games", {
       </div>
       <p class="cap mt3 text-center">{{ board.scope === 'online'
         ? '和别人打一局：赢 +2 分，输 -1 分（平局不加不减）'
-        : '扫雷：正常 +1 / 困难 +2 / 极难 +3；2048：每合成一个 2048 +1；弹幕大战：每 2 万分 +1（单局上限 10）' }}</p>
+        : '扫雷：正常 +1 / 困难 +2 / 极难 +3；2048：每合成一个 2048 +1；弹幕大战：每 2 万分 +1；坦克大战：每击毁 1 辆 +1（单局上限 10）' }}</p>
       <div class="glass glass-thin list mt3 board-list">
         <button v-for="row in board.rows" :key="row.uid" class="list-row tap" :class="{ me: row.uid === myId }"
                 @click="openProfile(row.uid)">
