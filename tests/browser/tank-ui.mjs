@@ -178,6 +178,29 @@ ok("宿主返回键退出也能结算（净胜 3 → +3）", backRet === "clicke
    "点击=" + backRet + "，积分 " + ptsBefore2 + " -> " + ptsAfter2);
 const hashNow = await api2.js("location.hash");
 ok("结算完之后宿主才真的离开游戏页", hashNow === "#/games", "当前 hash=" + hashNow);
+/* 安卓原生返回键（window.__androidBack）也要结算 —— 这条路以前直接 navigate，
+   界面返回按钮修好了但硬件返回键漏了，正是「白玩一局」的另一个入口 */
+await api2.sleep(10500);   // 同样等过 SOLO_COOLDOWN=10s
+await api2.js("location.hash='#/games/tank';'ok'");
+await api2.sleep(2600);
+const ptsBefore3 = (await lb()).me.solo;
+const abRet = await api2.js("(function(){try{var f=document.querySelector('.tank-frame');"
+  + "if(!f)return 'NO-IFRAME';"
+  + "f.contentDocument.querySelector('#startBtn').click();"
+  + "var ctl=f.contentWindow.__tankDebug.getCtl();"
+  + "ctl.playersInfo.get(1).score_=6;ctl.playersInfo.get(2).score_=2;"
+  + "if(typeof window.__androidBack!=='function')return 'NO-HOOK';"
+  + "window.__androidBack();return 'called';"
+  + "}catch(e){return 'ERR:'+e.message;}})()");
+await api2.sleep(1800);
+const ptsAfter3 = (await lb()).me.solo;
+ok("安卓原生返回键退出也能结算（净胜 4 → +4）", abRet === "called" && ptsAfter3 === ptsBefore3 + 4,
+   "调用=" + abRet + "，积分 " + ptsBefore3 + " -> " + ptsAfter3);
+const hashNow3 = await api2.js("location.hash");
+ok("安卓返回键结算完也真的离开了游戏页", hashNow3 === "#/games", "当前 hash=" + hashNow3);
+await api2.shot("D:/learn/_tank_androidback.png");
+clean(api2, "安卓返回键 + 结算");
+
 await api2.shot("D:/learn/_tank_host.png");
 clean(api2, "宿主 + 结算");
 api2.close();

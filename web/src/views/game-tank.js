@@ -85,7 +85,9 @@ registerRoute("/games/tank", defineView("gameTank", {
 
     onMounted(() => {
       window.addEventListener("message", onMessage);
-      stops.push(registerBack("/games/tank", () => { navigate("/games"); return true; }));
+      // 安卓原生返回键也走 goBack()：这里以前直接 navigate，于是按硬件返回键
+      // 退出时这一局照样不结算（和界面返回按钮是同一条丢分 bug）。
+      stops.push(registerBack("/games/tank", () => { goBack(); return true; }));
     });
     onUnmounted(() => {
       if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
