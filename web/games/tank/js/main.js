@@ -14,8 +14,10 @@
   var ctl = null;        // LocalController
   var renderer = null;   // GameRenderer
   var input = null;      // InputManager
-  var tickTimer = null;  // 10ms：moveAll + 重绘（对照原版 100Hz 逻辑 + 10ms 重绘）
+  var tickTimer = null;  // 10ms：只跑 moveAll 逻辑（100Hz，物理判定与原版一致）
   var infoTimer = null;  // 30ms：侧栏比分轮询（对照 GameView 的 30ms timeout）
+  var rafId = null;      // 重绘循环句柄
+  var dirty = false;     // 上一帧逻辑之后画面是否变了
   var hostPlayerName = null;
 
   /* ---------------- 与宿主页（game-tank.js）的 postMessage 桥 ----------------
@@ -35,6 +37,10 @@
       var name = String(d.name || "").trim().slice(0, 50);
       hostPlayerName = name || null;
       refreshSidebar();
+    } else if (d.type === "tank-quit") {
+      // 宿主按了返回键（含安卓物理返回）：走和点「退出」同一条结算路，
+      // 不然玩家用返回键离开就白玩一局
+      quitGame();
     }
   });
   post("tank-ready");
@@ -65,19 +71,35 @@
     hide(menuEl);
     show(gameEl);
     focusGame();
-    refreshSidebar();
+    buildSidebar();
 
-    // 对照 C++ 双循环：10ms 逻辑 tick + 重绘；30ms 侧栏轮询
+    renderer.draw();   // 开局先画一帧，不用等第一个 tick
+
+    // 逻辑仍是 10ms 一次（100Hz），对照 C++ 主循环，物理判定完全不变；
+    // 但重绘从「每个 tick 都全画布重画」改成 requestAnimationFrame：
+    // 原来手机上每秒 100 次全屏 canvas 重绘，正是单机游戏玩一会就发烫的主因。
+    // rAF 会自动对齐屏幕刷新率（手机一般 60/120Hz），页面切到后台也不再重绘。
     tickTimer = setInterval(function () {
       ctl.moveAll();
-      renderer.draw();
+      dirty = true;
     }, 10);
-    infoTimer = setInterval(refreshSidebar, 30);
+    infoTimer = setInterval(updateSidebar, 30);
+    drawLoop();
+  }
+
+  // 重绘循环：只有「上一帧逻辑跑过」才真正画，同一画面不会重复画
+  function drawLoop() {
+    rafId = requestAnimationFrame(drawLoop);
+    if (!dirty || !renderer) return;
+    dirty = false;
+    renderer.draw();
   }
 
   function stopGame() {
     if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
     if (infoTimer) { clearInterval(infoTimer); infoTimer = null; }
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    dirty = false;
     if (input) { input.release(); input = null; }
     if (ctl) { ctl.stop(); ctl = null; }
     renderer = null;
@@ -98,11 +120,17 @@
     post("tank-score", { score: score });
   }
 
-  // 侧栏：两名玩家的 图标 + 昵称 + 比分（对照 GameView::getPlayersInfo 每 30ms 重建）
-  function refreshSidebar() {
+  // 侧栏：两名玩家的 图标 + 昵称 + 比分。
+  // 原版 C++ 每 30ms 重建一次控件（GameView::getPlayersInfo），照搬到 DOM 上就是
+  // 每秒 33 次 innerHTML 清空 + 重建 6 个元素 + 重画两个 canvas，手机上纯属白烧电：
+  // 所以这里只建一次，之后每 30ms 只比较/更新两处文本。
+  var sidebarRows = [];
+
+  function buildSidebar() {
     if (!ctl) return;
     var players = ctl.getPlaysInfo();
     playerInfoBox.innerHTML = "";
+    sidebarRows = [];
     for (var i = 0; i < players.length; i++) {
       var p = players[i];
       var item = document.createElement("div");
@@ -114,20 +142,33 @@
 
       var nick = document.createElement("div");
       nick.className = "player-name";
-      var name = p.nickname_;
-      if (p.nickname_ === "你" && hostPlayerName) name = hostPlayerName;
-      nick.textContent = name;
 
       var score = document.createElement("div");
       score.className = "player-score";
-      score.textContent = String(p.score_);
 
       item.appendChild(icon);
       item.appendChild(nick);
       item.appendChild(score);
       playerInfoBox.appendChild(item);
+      sidebarRows.push({ nick: nick, score: score });
+    }
+    updateSidebar();
+  }
+
+  function updateSidebar() {
+    if (!ctl || !sidebarRows.length) return;
+    var players = ctl.getPlaysInfo();
+    for (var i = 0; i < sidebarRows.length && i < players.length; i++) {
+      var name = players[i].nickname_;
+      if (name === "你" && hostPlayerName) name = hostPlayerName;
+      if (sidebarRows[i].nick.textContent !== name) sidebarRows[i].nick.textContent = name;
+      var score = String(players[i].score_);
+      if (sidebarRows[i].score.textContent !== score) sidebarRows[i].score.textContent = score;
     }
   }
+
+  // 兼容旧调用点：名字变了要重画吗？不用，文本是每次比对的
+  function refreshSidebar() { updateSidebar(); }
 
   /* ---------------- 自适应缩放 ----------------
      舞台固定 760×420（与原版窗口一致），视口更小时整体等比缩小 */

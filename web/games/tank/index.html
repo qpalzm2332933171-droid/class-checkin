@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#14161a" />
+    <title>坦克大战</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <!-- 主菜单（main.js 的 #menu / #startBtn；.menu-bg 用 img/entry.jpg） -->
+    <div id="menu" class="screen">
+      <div class="menu-bg"></div>
+      <div class="menu-box">
+        <h1 class="menu-title">坦克大战</h1>
+        <p class="menu-sub">TANK BATTLE · 迷宫对轰</p>
+        <button id="startBtn" class="btn btn-primary">开始游戏</button>
+        <p class="menu-hint">
+          键盘：↑ ↓ 前进/后退，← → 转向，空格开火<br />
+          手机：左下摇杆拖动（内圈转向，推到底前进），右下红键开火<br />
+          击毁敌方坦克得分（比人机多几分就得几分，单局最多 10 分）
+        </p>
+      </div>
+    </div>
+
+    <!-- 游戏画面：760×420 固定舞台，视口更小时由 main.js 的 layoutScale() 整体缩放 -->
+    <div id="game" class="screen hidden">
+      <div id="stage">
+        <div id="gameArea">
+          <canvas id="gameCanvas" width="660" height="420"></canvas>
+        </div>
+        <div id="sidebar">
+          <div id="playerInfoBox"></div>
+          <button id="quitBtn" class="btn">退出</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 触屏控件：固定于视口、不随舞台缩放，所以必须放在 #game 外面
+         （#stage 上有 transform，放里面会被一起缩放，坐标就错位了） -->
+    <div id="touchControls" class="hidden">
+      <div id="joyZone" class="joy-zone">
+        <div id="joyBase" class="joy-base">
+          <div class="joy-ring-inner"></div>
+          <div id="joyKnob" class="joy-knob"></div>
+        </div>
+      </div>
+      <button id="btnFire" class="fire-btn">开火</button>
+    </div>
+
+    <!-- 加载顺序 = 依赖顺序（普通 <script>，顶层声明共享）：
+         defs 最先（util/id.js 里的 MAX_BLOCKS_NUM 在加载期就要用）；
+         Shell/Tank 要在 GameObject 之后；各策略要在 Strategy 之后；
+         LocalController 要在 Controller 之后；main.js 最后跑。 -->
+    <script src="js/defs.js"></script>
+    <script src="js/util/vec.js"></script>
+    <script src="js/util/math.js"></script>
+    <script src="js/util/id.js"></script>
+    <script src="js/object.js"></script>
+    <script src="js/block.js"></script>
+    <script src="js/shell.js"></script>
+    <script src="js/tank.js"></script>
+    <script src="js/maze.js"></script>
+    <script src="js/smithai/strategy.js"></script>
+    <script src="js/smithai/astar.js"></script>
+    <script src="js/smithai/attack-strategy.js"></script>
+    <script src="js/smithai/contact-strategy.js"></script>
+    <script src="js/smithai/dodge-strategy.js"></script>
+    <script src="js/smithai/agent-smith.js"></script>
+    <script src="js/controller.js"></script>
+    <script src="js/local-controller.js"></script>
+    <script src="js/renderer.js"></script>
+    <script src="js/input.js"></script>
+    <script src="js/main.js"></script>
+  </body>
+</html>

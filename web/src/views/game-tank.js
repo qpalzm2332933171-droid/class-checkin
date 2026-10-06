@@ -27,7 +27,22 @@ registerRoute("/games/tank", defineView("gameTank", {
     const gameSrc = mediaUrl("/games/tank/index.html");
     let stops = [];
 
-    function goBack() { navigate("/games"); }
+    let leaveTimer = null;
+    let leaving = false;
+
+    // 离开前先让游戏结算：点宿主返回键 / 安卓返回键退出时，
+    // 游戏刚打完的那一局也得算分（游戏内的「退出」按钮自己会上报，这里是兜底）。
+    // 等 tank-score 回来再跳；400ms 还没等到（iframe 卡住之类）就直接走，不卡返回键。
+    function goBack() {
+      const el = gameEl.value;
+      if (!leaving && el && el.contentWindow) {
+        leaving = true;
+        try { el.contentWindow.postMessage({ type: "tank-quit" }, "*"); } catch (err) { /* 忽略 */ }
+        leaveTimer = setTimeout(() => navigate("/games"), 400);
+        return;
+      }
+      navigate("/games");
+    }
 
     function sendPlayer() {
       const el = gameEl.value;
@@ -59,7 +74,13 @@ registerRoute("/games/tank", defineView("gameTank", {
       if (!el || !el.contentWindow || ev.source !== el.contentWindow) return;
       const d = ev.data || {};
       if (d.type === "tank-ready") sendPlayer();
-      else if (d.type === "tank-score") reportScore(d.score);
+      else if (d.type === "tank-score") {
+        reportScore(d.score);
+        if (leaving) {   // 结算回来了，可以走了
+          if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
+          navigate("/games");
+        }
+      }
     }
 
     onMounted(() => {
@@ -67,6 +88,7 @@ registerRoute("/games/tank", defineView("gameTank", {
       stops.push(registerBack("/games/tank", () => { navigate("/games"); return true; }));
     });
     onUnmounted(() => {
+      if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
       window.removeEventListener("message", onMessage);
       stops.forEach((fn) => fn && fn());
     });
